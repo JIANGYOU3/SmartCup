@@ -1,0 +1,29 @@
+# 密钥
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# 数据文件（不提交原始数据和输出结果）
+res/data/**/*.csv
+res/data/**/*.xlsx
+*.csv
+*.xlsx
+
+# 进度文件
+*_progress.json
+crawler_progress.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 临时文件
+*.tmp
+test_api.py
+test_*.py
