@@ -1,0 +1,231 @@
+"""
+抖音搜索爬虫 — 根据关键词搜索视频，自动爬取完整内容
+
+流程：关键词 → 搜索 API → 收集视频 ID → 调用 douyin.py 获取完整内容 → CSV+Excel
+
+用法：
+  conda run -n SmartCup python -u -m source.douyin_crawler.search_main \
+    --keywords "智能水杯,恒温杯" \
+    --pages 5
+"""
+
+import re
+import time
+import random
+from typing import Iterator
+
+from ..config import config
+from ..sign import Request
+from .douyin import DouyinScraper
+
+
+class DouyinSearcher:
+    """抖音搜索器 — 根据关键词查找视频"""
+
+    SEARCH_API = "/aweme/v1/web/general/search/single/"
+
+    def __init__(self, cookie: str = None):
+        self.cookie = cookie or config.COOKIE
+        self.api = Request(cookie=self.cookie)
+
+    def search(self, keyword: str, pages: int = 5) -> list[dict]:
+        """
+        搜索关键词，返回视频列表。
+
+        返回 list[dict]，每项包含: aweme_id, desc, author, url
+        """
+        results = []
+        offset = 0
+        count = 20  # 每页 20 条
+
+        for page in range(pages):
+            try:
+                resp, status = self.api.getJSON(
+                    self.SEARCH_API,
+                    {
+                        'keyword': keyword,
+                        'search_channel': 'aweme_general',
+                        'enable_history': 'enable_history',
+                        'query_correct_type': '1',
+                        'offset': offset,
+                        'count': count,
+                        'need_filter_settings': 'need_filter_settings',
+                        'list_type': 'single',
+                    }
+                )
+            except Exception:
+                break
+
+            if status != 200 or not resp:
+                break
+
+            items = []
+            # 搜索结果结构: resp.data -> list
+            data = resp.get("data") or []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                items = data.get("data") or []
+
+            if not items:
+                break
+
+            for item in items:
+                # 只保留视频类型
+                aweme_info = item.get("aweme_info") or {}
+                if not aweme_info:
+                    continue
+
+                aweme_id = aweme_info.get("aweme_id", "")
+                if not aweme_id:
+                    continue
+
+                results.append({
+                    "aweme_id": aweme_id,
+                    "desc": aweme_info.get("desc", ""),
+                    "author": (
+                        aweme_info.get("author", {}).get("nickname", "")
+                        if isinstance(aweme_info.get("author"), dict) else ""
+                    ),
+                    "url": f"https://www.douyin.com/video/{aweme_id}",
+                    "keyword": keyword,
+                })
+
+            offset += count
+            time.sleep(config.REQUEST_DELAY + random.uniform(0, 1.0))
+
+        return results
+
+    def search_multi(self, keywords: list[str], pages: int = 5) -> list[dict]:
+        """多关键词搜索，自动去重"""
+        seen = set()
+        all_results = []
+
+        for kw in keywords:
+            print(f"  搜索: {kw}", flush=True)
+            results = self.search(kw, pages)
+            for r in results:
+                if r["aweme_id"] not in seen:
+                    seen.add(r["aweme_id"])
+                    r["keyword"] = kw
+                    all_results.append(r)
+            print(f"    → {len(results)} 条（去重后累计 {len(all_results)}）", flush=True)
+
+        return all_results
+
+
+def search_and_crawl(
+    keywords: list[str],
+    search_pages: int = 5,
+    output_dir: str = None,
+    cookie: str = None,
+    auto_crawl: bool = True,
+    search_only: bool = False,
+):
+    """
+    完整的搜索 + 爬取流程。
+
+    Args:
+        keywords: 搜索关键词列表
+        search_pages: 每个关键词最多翻几页
+        output_dir: 输出目录（默认 res/data/douyin/output/）
+        cookie: 抖音 Cookie
+        auto_crawl: 是否自动爬取完整内容
+        search_only: 仅搜索不爬取
+    """
+    from pathlib import Path
+    from datetime import datetime
+    import csv
+
+    from source.common.paths import get_output_dir
+
+    if output_dir is None:
+        output_dir = get_output_dir("douyin")
+    else:
+        output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+
+    # ── 阶段 1：搜索 ──
+    print(f"\n{'='*60}")
+    print(f"阶段1: 抖音关键词搜索")
+    print(f"{'='*60}")
+    print(f"  关键词: {', '.join(keywords)}")
+    print(f"  每个关键词翻页: {search_pages} 页（每页 20 条）")
+    print()
+
+    searcher = DouyinSearcher(cookie)
+    results = searcher.search_multi(keywords, search_pages)
+
+    if not results:
+        print("❌ 未找到任何结果")
+        return
+
+    # 保存搜索结果
+    search_csv = output_dir / f"搜索结果_{timestamp}.csv"
+    with open(search_csv, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["aweme_id", "desc", "author", "url", "keyword"])
+        writer.writeheader()
+        writer.writerows(results)
+    print(f"\n📂 搜索结果: {search_csv}  ({len(results)} 条)")
+    print(f"   aweme_id 示例: {results[0]['aweme_id'] if results else 'N/A'}")
+
+    if search_only:
+        print("✅ 仅搜索模式完成")
+        return
+
+    # ── 阶段 2：爬取完整内容 ──
+    print(f"\n{'='*60}")
+    print(f"阶段2: 爬取视频完整内容")
+    print(f"{'='*60}")
+
+    crawl_csv = output_dir / f"爬取结果_{timestamp}.csv"
+    scraper = DouyinScraper(cookie)
+
+    from tqdm import tqdm
+
+    with open(crawl_csv, "w", encoding="utf-8-sig", newline="") as f:
+        from ..items import DouyinVideo
+        writer = csv.DictWriter(f, fieldnames=DouyinVideo.FIELDNAMES)
+        writer.writeheader()
+
+        success = 0
+        for item in tqdm(results, desc="爬取视频", unit="个"):
+            video = scraper.scrape(item["url"], item.get("keyword", ""))
+            if video:
+                row = video.to_dict()
+                row["关键词"] = item.get("keyword", "")
+                writer.writerow(row)
+                f.flush()
+                success += 1
+
+    print(f"\n✅ 爬取完成: {success}/{len(results)} 个视频")
+
+    # ── 阶段 3：转 Excel ──
+    if Path(crawl_csv).exists():
+        print(f"\n📊 正在生成 Excel...")
+        try:
+            from source.common.excel_style import csv_to_excel
+            excel_path = csv_to_excel(
+                Path(crawl_csv),
+                sheet_title="抖音爬取结果",
+                column_widths={
+                    "关键词": 20, "视频类型": 10, "播放数": 12, "评论数": 10,
+                    "视频标题": 45, "视频文案": 55, "作者昵称": 14,
+                    "发布时间": 16, "点赞数": 10, "分享数": 10,
+                    "视频时长": 10, "视频链接": 35,
+                },
+                link_columns={"视频链接"},
+                number_columns={"播放数", "评论数", "点赞数", "分享数", "视频时长"},
+            )
+            print(f"✅ Excel 已保存: {excel_path}")
+        except Exception as e:
+            print(f"⚠️ Excel 生成失败: {e}")
+
+    print(f"\n{'='*60}")
+    print(f"✅ 全流程完成")
+    print(f"{'='*60}")
+    print(f"   搜索关键词: {', '.join(keywords)}")
+    print(f"   搜索结果: {search_csv}")
+    print(f"   爬取结果: {crawl_csv}")

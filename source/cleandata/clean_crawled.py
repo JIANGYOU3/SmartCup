@@ -1,11 +1,13 @@
 """清洗爬取结果 — 删除污染数据"""
-import csv, re
+import csv
 from pathlib import Path
+from source.common.pollution import NSFW_KEYWORDS
+from source.common.excel_style import csv_to_excel
 
 INPUT = "res/data/zhihu/output/爬取结果.csv"
 OUTPUT = "res/data/zhihu/output/爬取结果_清洗后.csv"
 
-NSFW = ["飞机杯", "成人用品", "TENGA", "自慰", "充气娃娃", "振动棒", "按摩棒"]
+NSFW = NSFW_KEYWORDS
 
 with open(INPUT, "r", encoding="utf-8-sig") as f:
     rows = list(csv.DictReader(f))
@@ -60,53 +62,15 @@ for reason, cnt in sorted(removed_reasons.items(), key=lambda x: -x[1]):
 print(f"\n✅ 清洗后: {OUTPUT}")
 
 # 转 Excel
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-
-excel_path = Path(OUTPUT).with_suffix(".xlsx")
-wb = Workbook()
-ws = wb.active
-ws.title = "清洗后数据"
-
-hf = Font(name="微软雅黑", bold=True, size=11, color="FFFFFF")
-hfill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-ha = Alignment(horizontal="center", vertical="center", wrap_text=True)
-b = Border(left=Side(style="thin", color="D9D9D9"), right=Side(style="thin", color="D9D9D9"),
-           top=Side(style="thin", color="D9D9D9"), bottom=Side(style="thin", color="D9D9D9"))
-df = Font(name="微软雅黑", size=10)
-da = Alignment(vertical="top", wrap_text=True)
-lf = Font(name="微软雅黑", size=10, color="0563C1", underline="single")
-na = Alignment(horizontal="center", vertical="top")
-
-fieldnames = list(rows[0].keys())
-for ci, name in enumerate(fieldnames, 1):
-    c = ws.cell(row=1, column=ci, value=name)
-    c.font = hf; c.fill = hfill; c.alignment = ha; c.border = b
-
-for ri, row in enumerate(kept, 2):
-    for ci, name in enumerate(fieldnames, 1):
-        v = row.get(name, "")
-        c = ws.cell(row=ri, column=ci, value=v)
-        c.font = df; c.border = b
-        if name == "问答链接":
-            c.font = lf
-            if str(v).startswith("http"): c.hyperlink = str(v)
-            c.alignment = da
-        elif name in ("赞同数","评论数","问题被浏览次数","问题回答个数","问题评论个数"):
-            try: c.value = int(v)
-            except: pass
-            c.alignment = na
-        else:
-            c.alignment = da
-
-widths = {"关键词":25, "帖子类型":10, "问题被浏览次数":14, "问题回答个数":14,
-          "问题评论个数":14, "问题标题":40, "问题内容":50, "答主昵称":14,
-          "回答时间":16, "赞同数":10, "评论数":10, "回答内容":55, "问答链接":35}
-for ci, name in enumerate(fieldnames, 1):
-    ws.column_dimensions[get_column_letter(ci)].width = widths.get(name, 15)
-
-ws.freeze_panes = "A2"
-ws.auto_filter.ref = f"A1:{get_column_letter(len(fieldnames))}{len(kept)+1}"
-wb.save(excel_path)
+excel_path = csv_to_excel(
+    Path(OUTPUT),
+    sheet_title="清洗后数据",
+    column_widths={
+        "关键词": 25, "帖子类型": 10, "问题被浏览次数": 14, "问题回答个数": 14,
+        "问题评论个数": 14, "问题标题": 40, "问题内容": 50, "答主昵称": 14,
+        "回答时间": 16, "赞同数": 10, "评论数": 10, "回答内容": 55, "问答链接": 35,
+    },
+    link_columns={"问答链接"},
+    number_columns={"赞同数", "评论数", "问题被浏览次数", "问题回答个数", "问题评论个数"},
+)
 print(f"✅ Excel: {excel_path}")

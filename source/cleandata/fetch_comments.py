@@ -15,10 +15,11 @@ from pathlib import Path
 from collections import deque
 
 import requests
-from dotenv import load_dotenv
 from tqdm import tqdm
 
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+from source.common.paths import load_env, get_project_root
+
+load_env()
 COOKIE = os.getenv("ZHIHU_COOKIE", "")
 
 INPUT = "res/data/zhihu/output/爬取结果_清洗后.csv"

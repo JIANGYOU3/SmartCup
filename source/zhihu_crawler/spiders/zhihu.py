@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 
 from ..config import config
 from ..utils import clean_text
+from source.common.csv_utils import extract_links_from_csv
 
 
 class ZhihuScraper:

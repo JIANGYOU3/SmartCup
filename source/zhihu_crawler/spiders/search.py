@@ -20,6 +20,7 @@ import requests
 
 from ..config import config
 from .zhihu import ZhihuScraper, load_links_from_csv
+from source.common.paths import get_output_dir
 
 
 class ZhihuSearcher:
@@ -164,7 +165,7 @@ def search_and_crawl(
     import csv
 
     if output_dir is None:
-        output_dir = Path(__file__).resolve().parent.parent.parent.parent / "res" / "data" / "zhihu" / "output"
+        output_dir = get_output_dir("zhihu")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -229,8 +230,18 @@ def search_and_crawl(
         print(f"阶段3: 生成 Excel")
         print(f"{'='*60}")
         try:
-            from ..main import csv_to_excel
-            excel_path = csv_to_excel(crawl_output)
+            from source.common.excel_style import csv_to_excel
+            excel_path = csv_to_excel(
+                crawl_output,
+                sheet_title="爬取结果",
+                column_widths={
+                    "关键词": 25, "帖子类型": 10, "问题被浏览次数": 14, "问题回答个数": 14,
+                    "问题评论个数": 14, "问题标题": 40, "问题内容": 50, "答主昵称": 14,
+                    "回答时间": 16, "赞同数": 10, "评论数": 10, "回答内容": 55, "问答链接": 35,
+                },
+                link_columns={"问答链接"},
+                number_columns={"赞同数", "评论数", "问题被浏览次数", "问题回答个数", "问题评论个数"},
+            )
             print(f"✅ Excel 已保存: {excel_path}")
         except Exception as e:
             print(f"⚠️ Excel 生成失败: {e}")

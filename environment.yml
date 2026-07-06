@@ -61,11 +61,14 @@ dependencies:
       - beautifulsoup4==4.15.0
       - certifi==2026.6.17
       - charset-normalizer==3.4.7
+      - httpx
       - idna==3.18
+      - loguru
       - lxml==6.1.1
       - python-dotenv==1.2.2
       - requests==2.34.2
       - soupsieve==2.8.4
       - tqdm==4.68.3
       - typing-extensions==4.15.0
+      - ujson
       - urllib3==2.7.0

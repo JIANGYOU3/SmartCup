@@ -15,7 +15,6 @@ DeepSeek API 批量标签分类 + 证据提取脚本
 
 import csv
 import json
-import re
 import os
 import time
 import argparse
@@ -25,10 +24,15 @@ from typing import Optional
 
 import requests
 from tqdm import tqdm
-from dotenv import load_dotenv
 
-# 加载项目根目录的 .env 文件（脚本在 source/cleandata/ 下，根目录在三级之上）
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+from source.common.paths import load_env, get_project_root
+from source.common.text_utils import clean_text, extract_number, make_content_preview
+from source.common.pollution import NSFW_KEYWORDS, IRRELEVANT_CUP_KEYWORDS, is_polluted
+from source.common.csv_utils import parse_multiline_csv
+from source.common.excel_style import csv_to_excel
+
+# 加载项目根目录的 .env 文件
+load_env()
 
 # ──────────────────────────────────────────────
 # 配置
@@ -45,25 +49,6 @@ PROGRESS_FILE = "labeler_progress.json"  # 断点续跑进度文件
 DEFAULT_MAX_WORKERS = 8    # DeepSeek 付费账户默认并发数
 BATCH_SAVE_INTERVAL = 20   # 每处理 20 条保存一次进度
 
-# ──────────────────────────────────────────────
-# 污染检测关键词
-# ──────────────────────────────────────────────
-
-# 成人 / NSFW 内容 → 直接跳过，不发 API
-NSFW_KEYWORDS = [
-    # 只匹配明确的成人用品相关内容（必须完整匹配，避免误伤）
-    "飞机杯", "成人用品", "TENGA", "自慰", "充气娃娃",
-    "振动棒", "按摩棒",
-]
-
-# 跟杯子毫不相关的 "杯" → 直接跳过
-IRRELEVANT_CUP_KEYWORDS = [
-    "世界杯", "欧洲杯", "亚洲杯", "美洲杯", "非洲杯",
-    "冠军杯", "联赛杯", "足协杯", "联盟杯", "欧冠",
-    "NBA", "CBA",
-    "奖杯", "金杯", "银杯", "铜杯", "大力神杯",
-    "德劳内杯", "圣杯",
-]
 
 
 # ──────────────────────────────────────────────
@@ -134,70 +119,10 @@ def build_user_prompt(title: str, content: str) -> str:
     return f"标题：{title}\n\n内容摘要：{content}"
 
 
-# ──────────────────────────────────────────────
-# CSV 解析（兼容多行记录）
-# ──────────────────────────────────────────────
-
-def parse_records(csv_path: Path) -> list[dict]:
-    """解析 CSV，将跨行记录合并为单条"""
-    records = []
-
-    with open(csv_path, "r", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        header = [h.strip().replace("﻿", "") for h in header]
-
-        current = None
-        for row in reader:
-            has_link = len(row) >= 2 and row[1].strip().startswith("http")
-            if has_link:
-                if current is not None:
-                    records.append(_row_to_dict(header, current))
-                current = row
-            else:
-                if current is not None and row:
-                    current[-1] = current[-1] + "\n" + (row[0] if row else "")
-
-        if current is not None:
-            records.append(_row_to_dict(header, current))
-
-    return records
-
-
-def _row_to_dict(header: list[str], parts: list[str]) -> dict:
-    return {header[i]: parts[i].strip() if i < len(parts) else "" for i in range(len(header))}
-
 
 # ──────────────────────────────────────────────
-# 污染检测 & 数据清洗
+# 数据清洗辅助
 # ──────────────────────────────────────────────
-
-def check_pollution(title: str, content: str) -> Optional[str]:
-    """
-    检测记录是否污染。返回 None 表示干净，返回字符串表示污染原因。
-    """
-    full_text = f"{title} {content}"
-
-    # 1. 空内容（标题和正文都为空才算污染）
-    if len(title.strip()) < 3 and len(content.strip()) < 5:
-        return "空内容"
-
-    # 2. NSFW
-    for kw in NSFW_KEYWORDS:
-        if kw in full_text:
-            return f"NSFW-{kw}"
-
-    # 3. 无关"杯"（世界杯、奖杯等）
-    for kw in IRRELEVANT_CUP_KEYWORDS:
-        if kw in full_text:
-            return f"不相关-{kw}"
-
-    # 4. 纯 URL / 乱码
-    if re.match(r'^https?://', content.strip()) and len(content.strip()) < 50:
-        return "纯链接"
-
-    return None
-
 
 def extract_content_text(record: dict) -> str:
     """从记录中提取合并后的正文文本"""
@@ -209,29 +134,6 @@ def extract_content_text(record: dict) -> str:
         record.get("内容5", ""),
     ]
     return " ".join(p for p in parts if p).strip()
-
-
-def clean_text(text: str) -> str:
-    """清理文本：去掉控制字符、多余空白、特殊 HTML 实体"""
-    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', text)
-    text = text.replace('​', '').replace('‎', '').replace('‏', '')
-    text = re.sub(r'&#?\w+;', ' ', text)
-    text = re.sub(r'\s+', ' ', text)
-    return text.strip()
-
-
-def extract_number(text: str) -> int:
-    """从字符串中提取数字"""
-    m = re.search(r'(\d[\d,]*\d|\d)', str(text).replace(',', '').replace('，', ''))
-    return int(m.group(1).replace(',', '')) if m else 0
-
-
-def make_content_preview(text: str, max_len: int = 200) -> str:
-    """截取正文开头"""
-    cleaned = clean_text(text)
-    if len(cleaned) <= max_len:
-        return cleaned
-    return cleaned[:max_len] + "…"
 
 
 # ──────────────────────────────────────────────
@@ -341,7 +243,7 @@ def process_record(idx: int, record: dict, labeler: DeepSeekLabeler) -> dict:
     content = extract_content_text(record)
 
     # 1. 污染检测
-    pollution_reason = check_pollution(title, content)
+    pollution_reason = is_polluted(title, content)
     if pollution_reason:
         return {
             "index": idx,
@@ -391,79 +293,6 @@ def build_output_row(record: dict, ai_result: dict) -> dict:
     }
 
 
-def save_excel(rows: list[dict], fieldnames: list[str], excel_path: Path):
-    """将数据写入格式化的 Excel 文件"""
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "标签结果"
-
-    # 写表头
-    header_font = Font(name="微软雅黑", bold=True, size=11, color="FFFFFF")
-    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin_border = Border(
-        left=Side(style="thin", color="D9D9D9"),
-        right=Side(style="thin", color="D9D9D9"),
-        top=Side(style="thin", color="D9D9D9"),
-        bottom=Side(style="thin", color="D9D9D9"),
-    )
-
-    for col_idx, name in enumerate(fieldnames, 1):
-        cell = ws.cell(row=1, column=col_idx, value=name)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = header_align
-        cell.border = thin_border
-
-    # 写数据
-    data_font = Font(name="微软雅黑", size=10)
-    data_align = Alignment(vertical="top", wrap_text=True)
-    link_font = Font(name="微软雅黑", size=10, color="0563C1", underline="single")
-    number_align = Alignment(horizontal="center", vertical="top")
-
-    for row_idx, row_data in enumerate(rows, 2):
-        for col_idx, name in enumerate(fieldnames, 1):
-            value = row_data.get(name, "")
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.font = data_font
-            cell.border = thin_border
-
-            if name == "链接":
-                cell.font = link_font
-                cell.hyperlink = value if value.startswith("http") else None
-                cell.alignment = data_align
-            elif name in ("点赞数", "评论数"):
-                cell.alignment = number_align
-            else:
-                cell.alignment = data_align
-
-    # 列宽（基于内容和表头的合理宽度）
-    col_widths = {
-        "链接": 35,
-        "标签": 30,
-        "标题": 45,
-        "正文开头": 50,
-        "点赞数": 10,
-        "评论数": 10,
-        "AI证据理由": 55,
-        "AI原始JSON": 45,
-    }
-    for col_idx, name in enumerate(fieldnames, 1):
-        ws.column_dimensions[get_column_letter(col_idx)].width = col_widths.get(name, 15)
-
-    # 冻结表头行
-    ws.freeze_panes = "A2"
-
-    # 自动筛选
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(fieldnames))}{len(rows) + 1}"
-
-    wb.save(excel_path)
-
-
 def main():
     parser = argparse.ArgumentParser(description="DeepSeek API 批量标签分类器")
     parser.add_argument("--input", "-i", default="res/data/zhihu/raw/标题筛选版1.0.csv",
@@ -487,14 +316,14 @@ def main():
         print("   3. .env 文件: 编辑项目目录下的 .env，设置 DEEPSEEK_API_KEY=sk-xxxxx")
         return
 
-    project_root = Path(__file__).resolve().parent.parent.parent  # source/cleandata/ → root
+    project_root = get_project_root()
     input_path = project_root / args.input
     output_path = project_root / args.output
     output_dir = output_path.parent
 
     # ── 1. 解析 CSV ──
     print(f"📂 解析 CSV: {input_path}")
-    records = parse_records(input_path)
+    records = parse_multiline_csv(input_path)
     print(f"   共 {len(records)} 条记录")
     print()
 
@@ -504,7 +333,7 @@ def main():
     for i, rec in enumerate(records):
         title = clean_text(rec.get("highlight", ""))
         content = extract_content_text(rec)
-        reason = check_pollution(title, content)
+        reason = is_polluted(title, content)
         if reason:
             polluted_count += 1
         else:
@@ -518,7 +347,7 @@ def main():
             rec = records[i]
             title = clean_text(rec.get("highlight", ""))
             content = extract_content_text(rec)
-            reason = check_pollution(title, content)
+            reason = is_polluted(title, content)
             status = f"❌ {reason}" if reason else "✅ 干净"
             print(f"  [{i}] {status} | {title[:50]}")
         return
@@ -590,7 +419,7 @@ def main():
         if i not in results:
             title = clean_text(rec.get("highlight", ""))
             content = extract_content_text(rec)
-            reason = check_pollution(title, content) or "未知"
+            reason = is_polluted(title, content) or "未知"
             results[i] = {
                 "index": i,
                 "labels": ["污染"],
@@ -630,8 +459,16 @@ def main():
     print(f"✅ CSV 已保存: {output_path}")
 
     # ── 8. 输出 Excel ──
-    excel_path = output_path.with_suffix(".xlsx")
-    save_excel(all_rows, fieldnames, excel_path)
+    excel_path = csv_to_excel(
+        output_path,
+        sheet_title="标签结果",
+        column_widths={
+            "链接": 35, "标签": 30, "标题": 45, "正文开头": 50,
+            "点赞数": 10, "评论数": 10, "AI证据理由": 55, "AI原始JSON": 45,
+        },
+        link_columns={"链接"},
+        number_columns={"点赞数", "评论数"},
+    )
     print(f"✅ Excel 已保存: {excel_path}")
     print(f"   共 {len(records)} 行（含污染 {polluted_count} 条）")
 

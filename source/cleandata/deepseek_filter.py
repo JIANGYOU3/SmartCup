@@ -288,8 +288,9 @@ def main():
                         help="从上次中断处继续")
     args = parser.parse_args()
 
-    # 确定项目根目录（脚本在 source/cleandata/ 下，根目录在三级之上）
-    project_root = Path(__file__).resolve().parent.parent.parent
+    # 确定项目根目录
+    from source.common.paths import get_project_root
+    project_root = get_project_root()
     input_path = project_root / args.input
     output_path = project_root / args.output
     output_dir = output_path.parent

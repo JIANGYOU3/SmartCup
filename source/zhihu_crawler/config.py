@@ -2,17 +2,18 @@
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
+from source.common.paths import get_project_root, load_env
 
 # 加载 .env
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+load_env()
 
 
 class CrawlerConfig:
     """知乎爬虫配置"""
 
     # 项目路径
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+    PROJECT_ROOT = get_project_root()
     DATA_RAW = PROJECT_ROOT / "res" / "data" / "zhihu" / "raw"
     DATA_OUTPUT = PROJECT_ROOT / "res" / "data" / "zhihu" / "output"
 
