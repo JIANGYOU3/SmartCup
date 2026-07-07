@@ -156,12 +156,42 @@ class DouyinSearcher:
                 js_search = f"""
                 (async function(){{
                   try {{
-                    var url = '/aweme/v1/web/general/search/single/?keyword={keyword}' +
-                              '&search_channel=aweme_general&sort_type={self.sort_type}&offset={offset}&count=20' +
-                              '&aid=6383&device_platform=webapp&channel=channel_pc_web&pc_client_type=1';
+                    var params = new URLSearchParams({{
+                      keyword: '{keyword}',
+                      search_channel: 'aweme_general',
+                      sort_type: '{self.sort_type}',
+                      offset: '{offset}',
+                      count: '20',
+                      aid: '6383',
+                      device_platform: 'webapp',
+                      channel: 'channel_pc_web',
+                      pc_client_type: '1',
+                      version_code: '190500',
+                      version_name: '19.5.0',
+                      cookie_enabled: 'true',
+                      browser_language: 'zh-CN',
+                      browser_platform: 'Win32',
+                      browser_name: 'Chrome',
+                      engine_name: 'Blink',
+                      os_name: 'Windows',
+                      os_version: '10',
+                    }});
+                    var url = 'https://www.douyin.com/aweme/v1/web/general/search/single/?' + params.toString();
                     var resp = await fetch(url, {{
                       credentials: 'include',
-                      headers: {{'Accept': 'application/json', 'Referer': 'https://www.douyin.com/search/' + encodeURIComponent('{keyword}') + '?type=general'}}
+                      headers: {{
+                        'Accept': 'application/json, text/plain, */*',
+                        'Accept-Language': 'zh-CN,zh;q=0.9',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache',
+                        'Referer': 'https://www.douyin.com/search/' + encodeURIComponent('{keyword}') + '?type=general',
+                        'sec-ch-ua': '\"Not A(Brand\";v=\"8\", \"Chromium\";v=\"131\"',
+                        'sec-ch-ua-mobile': '?0',
+                        'sec-ch-ua-platform': '\"Windows\"',
+                        'sec-fetch-dest': 'empty',
+                        'sec-fetch-mode': 'cors',
+                        'sec-fetch-site': 'same-origin',
+                      }}
                     }});
                     var data = await resp.json();
                     var result = {{status_code: data.status_code}};
