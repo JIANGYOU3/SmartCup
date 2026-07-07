@@ -33,6 +33,8 @@ def main():
                         help="同时抓取评论（含点赞/回复数/子回复）")
     parser.add_argument("--comment-pages", type=int, default=5,
                         help="评论翻页数（默认5，每页20条）")
+    parser.add_argument("--sort", type=int, default=1, choices=[0, 1, 2],
+                        help="排序方式: 0=综合 1=最多点赞(默认) 2=最新发布")
     args = parser.parse_args()
 
     keywords = [kw.strip() for kw in args.keywords.split(",") if kw.strip()]
@@ -48,6 +50,7 @@ def main():
         search_only=args.search_only,
         with_comments=args.with_comments,
         comment_pages=args.comment_pages,
+        sort_type=args.sort,
     )
 
 

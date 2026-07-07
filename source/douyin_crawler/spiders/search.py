@@ -24,9 +24,15 @@ class DouyinSearcher:
 
     SEARCH_API = "/aweme/v1/web/general/search/single/"
 
-    def __init__(self, cookie: str = None):
+    def __init__(self, cookie: str = None, sort_type: int = 1):
+        """
+        Args:
+            cookie: 抖音 Cookie
+            sort_type: 排序方式 0=综合 1=最多点赞 2=最新发布
+        """
         self.cookie = cookie or config.COOKIE
         self.api = Request(cookie=self.cookie)
+        self.sort_type = sort_type
 
     def search(self, keyword: str, pages: int = 5) -> list[dict]:
         """
@@ -60,6 +66,7 @@ class DouyinSearcher:
                         'search_channel': 'aweme_general',
                         'enable_history': 'enable_history',
                         'query_correct_type': '1',
+                        'sort_type': str(self.sort_type),
                         'offset': offset,
                         'count': count,
                         'need_filter_settings': 'need_filter_settings',
@@ -150,7 +157,7 @@ class DouyinSearcher:
                 (async function(){{
                   try {{
                     var url = '/aweme/v1/web/general/search/single/?keyword={keyword}' +
-                              '&search_channel=aweme_general&offset={offset}&count=20' +
+                              '&search_channel=aweme_general&sort_type={self.sort_type}&offset={offset}&count=20' +
                               '&aid=6383&device_platform=webapp&channel=channel_pc_web&pc_client_type=1';
                     var resp = await fetch(url, {{
                       credentials: 'include',
@@ -263,6 +270,7 @@ def search_and_crawl(
     search_only: bool = False,
     with_comments: bool = False,
     comment_pages: int = 5,
+    sort_type: int = 1,
 ):
     """
     完整的搜索 + 爬取流程。
@@ -276,6 +284,7 @@ def search_and_crawl(
         search_only: 仅搜索不爬取
         with_comments: 是否抓取评论（含点赞/回复数）
         comment_pages: 评论翻页数
+        sort_type: 排序方式 0=综合 1=最多点赞 2=最新发布
     """
     from pathlib import Path
     from datetime import datetime
@@ -299,7 +308,7 @@ def search_and_crawl(
     print(f"  每个关键词翻页: {search_pages} 页（每页 20 条）")
     print()
 
-    searcher = DouyinSearcher(cookie)
+    searcher = DouyinSearcher(cookie, sort_type=sort_type)
     results = searcher.search_multi(keywords, search_pages)
 
     if not results:
