@@ -4,8 +4,7 @@
 策略 A（优先）：解析 HTML <script id="RENDER_DATA"> SSR JSON，首屏数据无需签名
 策略 B（补充）：通过 sign/Request 调用 API 获取视频详情 + 评论翻页
 
-输出 12 字段：关键词、视频类型、播放数、评论数、视频标题、视频文案、
-            作者昵称、发布时间、点赞数、分享数、视频时长、视频链接
+输出 14+ 基础字段 + 展开的评论列（含点赞/回复数/子回复）
 """
 
 import re
@@ -15,12 +14,13 @@ import random
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
+from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
 
 from ..config import config
-from ..items import DouyinVideo
+from ..items import DouyinVideo, DouyinComment
 from ..sign import Request
 
 
@@ -115,21 +115,22 @@ class DouyinScraper:
         # 提取字段（兼容多种结构变体）
         if isinstance(node, dict):
             result["desc"] = node.get("desc", "")
-            result["author"] = (
-                node.get("author", {}).get("nickname", "")
-                if isinstance(node.get("author"), dict) else ""
-            )
+            author = node.get("author", {}) if isinstance(node.get("author"), dict) else {}
+            result["author"] = author.get("nickname", "")
+            result["author_follower_count"] = author.get("follower_count", 0) or 0
+            result["author_uid"] = author.get("uid", "")
+
             # 互动数据优先从 statistics 子对象提取
             stats = node.get("statistics", {}) or {}
             result["digg_count"] = stats.get("digg_count", 0) or node.get("digg_count", 0) or 0
             result["comment_count"] = stats.get("comment_count", 0) or node.get("comment_count", 0) or 0
             result["share_count"] = stats.get("share_count", 0) or node.get("share_count", 0) or 0
+            result["collect_count"] = stats.get("collect_count", 0) or node.get("collect_count", 0) or 0
             result["play_count"] = stats.get("play_count", 0) or node.get("play_count", 0) or 0
             result["duration"] = node.get("duration", 0) or 0
             result["create_time"] = node.get("create_time", 0) or 0
 
             if result.get("create_time"):
-                from datetime import datetime
                 result["publish_time"] = datetime.fromtimestamp(result["create_time"]).strftime("%Y-%m-%d %H:%M:%S")
 
             # 标签
@@ -166,10 +167,10 @@ class DouyinScraper:
             return result
 
         result["desc"] = detail.get("desc", "")
-        result["author"] = (
-            detail.get("author", {}).get("nickname", "")
-            if isinstance(detail.get("author"), dict) else ""
-        )
+        author = detail.get("author", {}) if isinstance(detail.get("author"), dict) else {}
+        result["author"] = author.get("nickname", "")
+        result["author_follower_count"] = author.get("follower_count", 0) or 0
+        result["author_uid"] = author.get("uid", "")
         result["duration"] = detail.get("duration", 0) or 0
 
         # 互动数据优先从 statistics 子对象提取
@@ -177,20 +178,28 @@ class DouyinScraper:
         result["digg_count"] = stats.get("digg_count", 0) or detail.get("digg_count", 0) or 0
         result["comment_count"] = stats.get("comment_count", 0) or detail.get("comment_count", 0) or 0
         result["share_count"] = stats.get("share_count", 0) or detail.get("share_count", 0) or 0
+        result["collect_count"] = stats.get("collect_count", 0) or detail.get("collect_count", 0) or 0
         result["play_count"] = stats.get("play_count", 0) or 0
 
         create_time = detail.get("create_time", 0) or 0
         if create_time:
-            from datetime import datetime
             result["publish_time"] = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S")
+
+        # 标签
+        tags = []
+        if isinstance(detail.get("text_extra"), list):
+            for te in detail["text_extra"]:
+                if te.get("hashtag_name"):
+                    tags.append(te["hashtag_name"])
+        result["tags"] = tags
 
         return result
 
-    # ── 评论获取 ──────────────────────────────────
+    # ── 评论获取（结构化）───────────────────────
 
-    def fetch_comments(self, aweme_id: str, max_pages: int = 10) -> list[str]:
-        """获取视频评论（纯文本列表）"""
-        comments = []
+    def fetch_comments(self, aweme_id: str, max_pages: int = 10) -> list[DouyinComment]:
+        """获取视频评论（结构化：含点赞/回复数/子回复）"""
+        comments: list[DouyinComment] = []
         cursor = 0
 
         for page in range(max_pages):
@@ -214,15 +223,45 @@ class DouyinScraper:
 
                 for c in comment_list:
                     text = c.get("text", "").strip()
-                    if text:
-                        comments.append(text)
+                    if not text:
+                        continue
+
+                    user = c.get("user", {}) or {}
+                    create_time = c.get("create_time", 0) or 0
+                    time_str = ""
+                    if create_time:
+                        time_str = datetime.fromtimestamp(create_time).strftime("%Y-%m-%d %H:%M:%S")
+
+                    # 子回复
+                    reply_list = c.get("reply_comment") or []
+                    sub_replies = []
+                    for r in reply_list[:5]:
+                        ru = r.get("user", {}) or {}
+                        sub_replies.append({
+                            "user": ru.get("nickname", ""),
+                            "text": str(r.get("text", "")).strip(),
+                            "digg": r.get("digg_count", 0) or 0,
+                        })
+
+                    comments.append(DouyinComment(
+                        cid=str(c.get("cid", "")),
+                        user=user.get("nickname", ""),
+                        text=text,
+                        digg_count=c.get("digg_count", 0) or 0,
+                        reply_total=c.get("reply_comment_total", 0) or 0,
+                        create_time=time_str,
+                        ip_label=c.get("ip_label", ""),
+                        sub_replies=sub_replies,
+                    ))
 
                 cursor = resp.get("cursor", 0)
                 has_more = resp.get("has_more", 0)
                 if not has_more:
                     break
 
-            except Exception:
+            except Exception as e:
+                import traceback
+                print(f"  ⚠️ 评论抓取异常 (page={page}): {e}")
                 break
 
         return comments
@@ -257,7 +296,7 @@ class DouyinScraper:
         video_type = "短视频"
         if result.get("duration", 0) == 0 and result.get("desc"):
             # 可能是图文（没有时长但有描述）
-            images = result.get("images", []) or render_data.get("images", []) if render_data else []
+            images = result.get("images", []) or (render_data or {}).get("images", [])
             if images:
                 video_type = "图文"
 
@@ -268,9 +307,11 @@ class DouyinScraper:
             desc=result.get("desc", ""),
             content=result.get("desc", ""),  # 抖音视频描述即内容
             author=result.get("author", ""),
+            author_follower_count=result.get("author_follower_count", 0),
             play_count=result.get("play_count", 0),
             digg_count=result.get("digg_count", 0),
             comment_count=result.get("comment_count", 0),
+            collect_count=result.get("collect_count", 0),
             share_count=result.get("share_count", 0),
             publish_time=result.get("publish_time", ""),
             duration=result.get("duration", 0),
@@ -278,10 +319,9 @@ class DouyinScraper:
         )
 
     def scrape_with_comments(self, url: str, keyword: str = "", max_comment_pages: int = 5) -> Optional[DouyinVideo]:
-        """爬取视频 + 评论"""
+        """爬取视频 + 结构化评论"""
         video = self.scrape(url, keyword)
         if video and video.comment_count > 0:
             comments = self.fetch_comments(video.aweme_id, max_comment_pages)
-            if comments:
-                video.extra["comments"] = comments
+            video.comments = comments
         return video

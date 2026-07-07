@@ -29,6 +29,10 @@ def main():
                         help="输出目录（默认 res/data/douyin/output/）")
     parser.add_argument("--search-only", action="store_true",
                         help="仅搜索不爬取内容")
+    parser.add_argument("--with-comments", action="store_true",
+                        help="同时抓取评论（含点赞/回复数/子回复）")
+    parser.add_argument("--comment-pages", type=int, default=5,
+                        help="评论翻页数（默认5，每页20条）")
     args = parser.parse_args()
 
     keywords = [kw.strip() for kw in args.keywords.split(",") if kw.strip()]
@@ -42,6 +46,8 @@ def main():
         output_dir=args.output_dir,
         cookie=args.cookie,
         search_only=args.search_only,
+        with_comments=args.with_comments,
+        comment_pages=args.comment_pages,
     )
 
 

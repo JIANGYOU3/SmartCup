@@ -373,6 +373,9 @@ class Request(object):
             '/aweme/v1/web/home/search/item/': f"https://www.douyin.com/user/",
             '/aweme/v1/web/seo/inner/link/': f"https://www.douyin.com/user/",
             '/aweme/v2/web/module/feed/': f"https://www.douyin.com/jingxuan",
+            '/aweme/v1/web/general/search/single/': f"https://www.douyin.com/search/{params.get('keyword', '')}?type=general",
+            '/aweme/v1/web/search/item/': f"https://www.douyin.com/search/{params.get('keyword', '')}?type=general",
+            '/aweme/v1/web/tab/feed/': f"https://www.douyin.com/?recommend=1",
         }
         for pattern, referer_value in referer_map.items():
             if pattern == uri:

@@ -256,6 +256,8 @@ def search_and_crawl(
     cookie: str = None,
     auto_crawl: bool = True,
     search_only: bool = False,
+    with_comments: bool = False,
+    comment_pages: int = 5,
 ):
     """
     完整的搜索 + 爬取流程。
@@ -267,6 +269,8 @@ def search_and_crawl(
         cookie: 抖音 Cookie
         auto_crawl: 是否自动爬取完整内容
         search_only: 仅搜索不爬取
+        with_comments: 是否抓取评论（含点赞/回复数）
+        comment_pages: 评论翻页数
     """
     from pathlib import Path
     from datetime import datetime
@@ -313,20 +317,32 @@ def search_and_crawl(
     print(f"\n{'='*60}")
     print(f"阶段2: 爬取视频完整内容")
     print(f"{'='*60}")
+    if with_comments:
+        print(f"  含评论抓取（翻页: {comment_pages}）")
 
     crawl_csv = output_dir / f"爬取结果_{timestamp}.csv"
     scraper = DouyinScraper(cookie)
 
     from tqdm import tqdm
+    from ..items import DouyinVideo
+
+    # 基础字段名
+    max_comment_cols = 20 if with_comments else 0
+    fieldnames = DouyinVideo.get_fieldnames(max_comment_cols) if with_comments else DouyinVideo.BASE_FIELDNAMES
 
     with open(crawl_csv, "w", encoding="utf-8-sig", newline="") as f:
-        from ..items import DouyinVideo
-        writer = csv.DictWriter(f, fieldnames=DouyinVideo.FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         writer.writeheader()
 
         success = 0
         for item in tqdm(results, desc="爬取视频", unit="个"):
-            video = scraper.scrape(item["url"], item.get("keyword", ""))
+            if with_comments:
+                video = scraper.scrape_with_comments(
+                    item["url"], item.get("keyword", ""), max_comment_pages=comment_pages
+                )
+            else:
+                video = scraper.scrape(item["url"], item.get("keyword", ""))
+
             if video:
                 row = video.to_dict()
                 row["关键词"] = item.get("keyword", "")
@@ -347,11 +363,12 @@ def search_and_crawl(
                 column_widths={
                     "关键词": 20, "视频类型": 10, "播放数": 12, "评论数": 10,
                     "视频标题": 45, "视频文案": 55, "作者昵称": 14,
-                    "发布时间": 16, "点赞数": 10, "分享数": 10,
-                    "视频时长": 10, "视频链接": 35,
+                    "作者粉丝量": 12, "发布时间": 16, "点赞数": 10,
+                    "收藏数": 10, "分享数": 10, "视频时长": 10, "视频链接": 35,
                 },
                 link_columns={"视频链接"},
-                number_columns={"播放数", "评论数", "点赞数", "分享数", "视频时长"},
+                number_columns={"播放数", "评论数", "点赞数", "收藏数", "分享数",
+                                "视频时长", "作者粉丝量"},
             )
             print(f"✅ Excel 已保存: {excel_path}")
         except Exception as e:
