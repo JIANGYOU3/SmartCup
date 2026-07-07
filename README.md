@@ -1,6 +1,6 @@
-# SmartCup — 智能水杯市场数据采集 & AI 标签分类
+# SmartCup — 智能水杯市场数据采集 · AI 分析 · 关键词洞察
 
-> **知乎 + 抖音双平台数据采集 + DeepSeek AI 自动打标签，完整的数据工作流。**
+> **知乎 + 抖音双平台采集 → 数据清洗 → DeepSeek AI 多维标签 → 关键词分类表，完整市场分析数据管道。**
 >
 > 仓库地址：https://github.com/JIANGYOU3/SmartCup
 
@@ -22,6 +22,7 @@
   - [知乎爬虫](#知乎爬虫)
   - [抖音爬虫](#抖音爬虫)
   - [数据清洗 & AI 打标签](#数据清洗--ai-打标签)
+  - [关键词表生成](#关键词表生成)
 - [AI 标签体系](#ai-标签体系)
 - [数据字段说明](#数据字段说明)
 - [技术架构](#技术架构)
@@ -316,11 +317,13 @@ SmartCup/
 │   │   └── csv_utils.py          #   跨行 CSV 解析 / 链接提取
 │   │
 │   ├── cleandata/                # 🧹 数据清洗 & AI 打标签
-│   │   ├── batch_labeler.py      #   ⭐ DeepSeek 批量标签分类（主脚本）
-│   │   ├── deepseek_filter.py    #   DeepSeek 筛选过滤（旧版，单条判断）
-│   │   ├── clean_crawled.py      #   爬取结果清洗（去视频/NSFW/短内容）
-│   │   ├── fetch_comments.py     #   评论区采集（知乎 API）
-│   │   └── csv2xlsx.py           #   CSV → Excel 转换工具
+│   │   ├── douyin_labeler.py      #   ⭐ 抖音多维标签（合并/清洗/AI/输出 一键管道）
+│   │   ├── generate_keywords.py   #   ⭐ 关键词提取 & 分类表生成
+│   │   ├── batch_labeler.py       #   知乎 DeepSeek 批量标签分类
+│   │   ├── deepseek_filter.py     #   DeepSeek 筛选过滤（旧版，单条判断）
+│   │   ├── clean_crawled.py       #   爬取结果清洗（去视频/NSFW/短内容）
+│   │   ├── fetch_comments.py      #   评论区采集（知乎 API）
+│   │   └── csv2xlsx.py            #   CSV → Excel 转换工具
 │   │
 │   ├── zhihu_crawler/            # 🌐 知乎爬虫
 │   │   ├── main.py               #   入口：基于已有链接列表爬取
@@ -417,8 +420,22 @@ SmartCup/
     ┌───────────────┐
     │  Excel 输出    │
     │  标签结果.xlsx │
-    └───────────────┘
+    └───────┬───────┘
+            │
+            ▼
+    ┌───────────────┐
+    │ 关键词提取     │
+    │ 9类关键词表    │
+    └───────┬───────┘
+            │
+            ▼
+    ┌───────────────────┐
+    │  关键词表.xlsx     │
+    │  → 下轮爬虫输入    │
+    └───────────────────┘
 ```
+
+> 抖音额外完整流程：`爬取 → douyin_labeler(清洗+8维AI标签) → generate_keywords(关键词分类表) → 新关键词 → 再爬取`，形成数据闭环。
 
 ---
 
@@ -550,50 +567,97 @@ conda run -n SmartCup python -u -m source.douyin_crawler.main \
 
 ### 数据清洗 & AI 打标签
 
-#### 1. 清洗爬取结果
+#### 知乎数据（知乎问答/专栏）
+
+##### 1. 清洗爬取结果
 
 ```bash
 conda run -n SmartCup python source/cleandata/clean_crawled.py
 ```
 
-清洗规则：
-- ❌ 视频类（无文字内容）
-- ❌ 空内容
-- ❌ NSFW（成人用品等）
-- ❌ 短内容无互动（<20 字且 0 赞 0 评）
+清洗规则：视频类 ❌ / 空内容 ❌ / NSFW ❌ / 短内容无互动 ❌
 
-#### 2. 爬取评论区（可选）
+##### 2. 爬取评论区（可选）
 
 ```bash
 conda run -n SmartCup python source/cleandata/fetch_comments.py
 ```
 
-筛选评论数 > 0 的问答帖，调用知乎评论 API 采集评论。
-
-#### 3. AI 批量标签分类
+##### 3. AI 批量标签分类
 
 ```bash
-# 正式运行（8 并发）
 conda run -n SmartCup python -u source/cleandata/batch_labeler.py --workers 8 --resume
-
-# Dry-run 测试（不调 API，仅预览）
-conda run -n SmartCup python source/cleandata/batch_labeler.py --dry-run
-
-# 断点续跑（从上次中断位置继续）
-conda run -n SmartCup python source/cleandata/batch_labeler.py --workers 8 --resume
 ```
 
-- `--workers 8`：8 个并发请求（DeepSeek 付费账户安全值）
-- `--resume`：支持断点续跑，中断后自动恢复
-- 每处理 20 条自动保存进度，防止数据丢失
+---
 
-#### 4. CSV 转 Excel
+#### 抖音数据（视频/图文）
+
+##### 清洗 + AI 多维标签（一键管道）⭐
 
 ```bash
-conda run -n SmartCup python source/cleandata/csv2xlsx.py res/data/zhihu/output/标签结果.csv
+# Dry-run 预览（不调 API）
+conda run -n SmartCup python -u source/cleandata/douyin_labeler.py --dry-run
+
+# 正式运行（6 并发，支持断点续跑）
+conda run -n SmartCup python -u source/cleandata/douyin_labeler.py --workers 6 --resume
 ```
 
-Excel 自动格式化：蓝色表头 + 冻结首行 + 自动筛选 + 链接列超链接样式。
+自动完成：**合并多轮爬取 CSV → 去重 → 清洗无效评论 → AI 打标签 → CSV+Excel 输出**
+
+##### 评论清洗规则
+
+- ❌ 纯 "哈哈哈" / "呵呵呵" 类
+- ❌ 纯 emoji / 表情符号
+- ❌ 仅 @某人 无实质内容
+- ❌ 纯标点 / 纯数字
+- ❌ 长度 < 2 字符
+- ✅ 自动去除 @提及前缀
+
+##### AI 多维标签维度
+
+每条视频输出 **8 个分析维度**：
+
+| 维度 | 说明 | 示例 |
+|------|------|------|
+| 内容标签 | 产品/品牌分类（可多个） | 智能水杯/温控杯, 华为/鸿蒙水杯 |
+| 内容相关性 | 与智能水杯市场的相关程度 | 高 / 中 / 低 + 理由 |
+| 话题类别 | 内容类型 | 测评 / 开箱 / 广告 / 教程 / 对比 |
+| 用户情绪 | 评论区的整体情绪 | 正面 / 负面 / 中性 / 混合 |
+| 需求痛点 | 从评论提取的用户需求 | "想要温度显示""保温效果不好" |
+| 数据价值 | 对市场分析的参考价值 | 高 / 中 / 低 + 理由 |
+| 关键词 | 提取 3-5 个关键描述词 | 智能水杯, 温控, 测评 |
+| 一句话总结 | 20 字内概括 | 米家智能杯测评，用户关注保温与便携 |
+
+---
+
+### 关键词表生成
+
+从 AI 标签结果中自动提取和分类关键词，生成下次爬虫的搜索词库。
+
+```bash
+# 完整流程（规则分类 + DeepSeek AI 优化）
+conda run -n SmartCup python -u source/cleandata/generate_keywords.py
+
+# 仅规则分类（跳过 AI）
+conda run -n SmartCup python -u source/cleandata/generate_keywords.py --no-ai
+```
+
+输出 **9 类关键词表**（CSV + Excel）：
+
+| 类别 | 说明 | 示例 |
+|------|------|------|
+| 核心词 | 最核心的产品关键词 | 智能水杯、恒温杯、55度杯 |
+| 品牌词 | 品牌名称 | 华为、米家、哈尔斯、膳魔师 |
+| 功能词 | 功能特性 | 温度显示、茶水分离、指纹解锁 |
+| 场景词 | 使用场景 | 母婴、办公室、车载、户外 |
+| 评价词 | 评价/购买决策相关 | 测评、性价比、避坑、开箱 |
+| 人群词 | 目标用户群体 | 宝妈、上班族、学生 |
+| 痛点词 | 用户痛点/需求 | 孩子不爱喝水、保温效果差 |
+| 长尾词 | 长尾搜索词 | 选购攻略、暴力测试、生日礼物 |
+| 推荐搜索组合 | 高效搜索词组 | "智能水杯 测评""恒温杯 推荐" |
+
+> 💡 生成的 `关键词表.xlsx` 可直接作为下轮爬虫的搜索词输入。
 
 ---
 
