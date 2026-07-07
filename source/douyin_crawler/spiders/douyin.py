@@ -113,20 +113,18 @@ class DouyinScraper:
             return result
 
         # 提取字段（兼容多种结构变体）
-        # 视频信息
         if isinstance(node, dict):
             result["desc"] = node.get("desc", "")
             result["author"] = (
                 node.get("author", {}).get("nickname", "")
                 if isinstance(node.get("author"), dict) else ""
             )
-            result["digg_count"] = node.get("digg_count", 0) or 0
-            result["comment_count"] = node.get("comment_count", 0) or 0
-            result["share_count"] = node.get("share_count", 0) or 0
-            result["play_count"] = (
-                node.get("statistics", {}).get("play_count", 0)
-                if isinstance(node.get("statistics"), dict) else 0
-            )
+            # 互动数据优先从 statistics 子对象提取
+            stats = node.get("statistics", {}) or {}
+            result["digg_count"] = stats.get("digg_count", 0) or node.get("digg_count", 0) or 0
+            result["comment_count"] = stats.get("comment_count", 0) or node.get("comment_count", 0) or 0
+            result["share_count"] = stats.get("share_count", 0) or node.get("share_count", 0) or 0
+            result["play_count"] = stats.get("play_count", 0) or node.get("play_count", 0) or 0
             result["duration"] = node.get("duration", 0) or 0
             result["create_time"] = node.get("create_time", 0) or 0
 
@@ -172,13 +170,13 @@ class DouyinScraper:
             detail.get("author", {}).get("nickname", "")
             if isinstance(detail.get("author"), dict) else ""
         )
-        result["digg_count"] = detail.get("digg_count", 0) or 0
-        result["comment_count"] = detail.get("comment_count", 0) or 0
-        result["share_count"] = detail.get("share_count", 0) or 0
         result["duration"] = detail.get("duration", 0) or 0
 
-        # 播放数从 statistics 子对象提取
+        # 互动数据优先从 statistics 子对象提取
         stats = detail.get("statistics", {}) or {}
+        result["digg_count"] = stats.get("digg_count", 0) or detail.get("digg_count", 0) or 0
+        result["comment_count"] = stats.get("comment_count", 0) or detail.get("comment_count", 0) or 0
+        result["share_count"] = stats.get("share_count", 0) or detail.get("share_count", 0) or 0
         result["play_count"] = stats.get("play_count", 0) or 0
 
         create_time = detail.get("create_time", 0) or 0

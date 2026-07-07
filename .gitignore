@@ -1,5 +1,6 @@
 # 密钥
 .env
+config/cookie.json
 
 # Python
 __pycache__/

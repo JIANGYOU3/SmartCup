@@ -1,7 +1,7 @@
 """
 抖音搜索爬虫 — 根据关键词搜索视频，自动爬取完整内容
 
-流程：关键词 → 搜索 API → 收集视频 ID → 调用 douyin.py 获取完整内容 → CSV+Excel
+流程：关键词 → 搜索 API / CDP 浏览器 → 收集视频 ID → 爬取完整内容 → CSV+Excel
 
 用法：
   conda run -n SmartCup python -u -m source.douyin_crawler.search_main \
@@ -31,12 +31,25 @@ class DouyinSearcher:
     def search(self, keyword: str, pages: int = 5) -> list[dict]:
         """
         搜索关键词，返回视频列表。
+        优先尝试 API 搜索，失败则回退到 CDP 浏览器搜索。
 
         返回 list[dict]，每项包含: aweme_id, desc, author, url
         """
+        # 先尝试 API
+        results = self._search_api(keyword, pages)
+        if results:
+            return results
+
+        # API 失败，尝试 CDP 浏览器搜索
+        print(f"  ⚠️ API 搜索被风控，尝试 CDP 浏览器搜索...")
+        results = self._search_cdp(keyword, pages)
+        return results
+
+    def _search_api(self, keyword: str, pages: int = 5) -> list[dict]:
+        """通过 API 搜索（需要 websign 签名）"""
         results = []
         offset = 0
-        count = 20  # 每页 20 条
+        count = 20
 
         for page in range(pages):
             try:
@@ -59,8 +72,14 @@ class DouyinSearcher:
             if status != 200 or not resp:
                 break
 
+            # 检查是否被风控
+            if resp.get('status_code') != 0:
+                nil_info = resp.get('search_nil_info', {}) or {}
+                if nil_info.get('search_nil_type') == 'verify_check':
+                    return []  # 被风控，回退到 CDP
+                break
+
             items = []
-            # 搜索结果结构: resp.data -> list
             data = resp.get("data") or []
             if isinstance(data, list):
                 items = data
@@ -71,7 +90,6 @@ class DouyinSearcher:
                 break
 
             for item in items:
-                # 只保留视频类型
                 aweme_info = item.get("aweme_info") or {}
                 if not aweme_info:
                     continue
@@ -93,6 +111,123 @@ class DouyinSearcher:
 
             offset += count
             time.sleep(config.REQUEST_DELAY + random.uniform(0, 1.0))
+
+        return results
+
+    def _search_cdp(self, keyword: str, pages: int = 5) -> list[dict]:
+        """通过 CDP 浏览器搜索（需要 Chrome 开启远程调试）"""
+        try:
+            from ..lib.cdp2 import CDP, get_ws
+        except ImportError:
+            print("  ❌ CDP 模块不可用，请安装 websocket-client")
+            return []
+
+        ws = get_ws()
+        if not ws:
+            print("  ❌ 未找到 Chrome 调试端口")
+            print("  请用以下命令启动 Chrome：")
+            print('  chrome.exe --remote-debugging-port=9222 --remote-allow-origins=*')
+            print("  然后打开 www.douyin.com 并登录")
+            return []
+
+        cdp = CDP(ws)
+        cdp.cmd("Page.enable")
+        cdp.cmd("Runtime.enable")
+
+        results = []
+        all_ids = set()
+
+        try:
+            for page in range(min(pages, 5)):  # CDP 最多 5 页避免太慢
+                if page == 0:
+                    # 第一页：导航到搜索页
+                    import urllib.parse
+                    search_url = f'https://www.douyin.com/search/{urllib.parse.quote(keyword)}?type=general'
+                    cdp.cmd("Page.navigate", {"url": search_url})
+                    time.sleep(5)  # 等页面渲染
+                else:
+                    # 翻页：滚动到底部加载更多
+                    cdp.cmd("Runtime.evaluate", {
+                        "expression": "window.scrollTo(0, document.body.scrollHeight)",
+                        "returnByValue": True
+                    })
+                    time.sleep(3)
+
+                # 提取视频 ID（从 React fiber）
+                js_extract = """
+                (function(){
+                  var cards = document.querySelectorAll('.search-result-card');
+                  var ids = [];
+                  var descs = [];
+
+                  function deepFind(obj, depth) {
+                    if (!obj || depth > 50 || typeof obj !== 'object') return null;
+                    if (obj.aweme_id || obj.awemeId) {
+                      return String(obj.aweme_id || obj.awemeId);
+                    }
+                    var keys = Object.keys(obj);
+                    for (var i = 0; i < keys.length; i++) {
+                      var k = keys[i];
+                      if (k === 'aweme_id' || k === 'awemeId') return String(obj[k]);
+                      try {
+                        if (typeof obj[k] === 'object' && obj[k] !== null && k !== 'owner' && k !== 'parent' && k !== 'source') {
+                          var result = deepFind(obj[k], depth + 1);
+                          if (result) return result;
+                        }
+                      } catch(e) {}
+                    }
+                    return null;
+                  }
+
+                  cards.forEach(function(card) {
+                    var fiberKey = Object.keys(card).find(function(k){
+                      return k.startsWith('__reactFiber');
+                    });
+                    var videoId = null;
+                    if (fiberKey) videoId = deepFind(card[fiberKey], 0);
+                    if (videoId) {
+                      ids.push(videoId);
+                      var text = card.textContent.replace(/\\s+/g, ' ').trim().substring(0, 100);
+                      descs.push(text);
+                    }
+                  });
+                  return JSON.stringify({ids: ids, descs: descs});
+                })()
+                """
+
+                result = cdp.cmd("Runtime.evaluate", {
+                    "expression": js_extract,
+                    "returnByValue": True
+                })
+
+                value = result.get("result", {}).get("result", {}).get("value", "")
+                if value:
+                    import json
+                    data = json.loads(value)
+                    ids = data.get("ids", [])
+                    descs = data.get("descs", [])
+
+                    new_count = 0
+                    for i, vid in enumerate(ids):
+                        if vid not in all_ids:
+                            all_ids.add(vid)
+                            desc = descs[i] if i < len(descs) else ""
+                            results.append({
+                                "aweme_id": vid,
+                                "desc": desc[:120],
+                                "author": "",
+                                "url": f"https://www.douyin.com/video/{vid}",
+                                "keyword": keyword,
+                            })
+                            new_count += 1
+
+                    print(f"  📄 '{keyword}' 第{page+1}页: {len(ids)}条, 新增 {new_count} 条")
+
+                    if len(ids) < 10:
+                        break  # 不够一页，可能没有更多结果了
+
+        finally:
+            cdp.close()
 
         return results
 
@@ -169,7 +304,6 @@ def search_and_crawl(
         writer.writeheader()
         writer.writerows(results)
     print(f"\n📂 搜索结果: {search_csv}  ({len(results)} 条)")
-    print(f"   aweme_id 示例: {results[0]['aweme_id'] if results else 'N/A'}")
 
     if search_only:
         print("✅ 仅搜索模式完成")
@@ -229,3 +363,5 @@ def search_and_crawl(
     print(f"   搜索关键词: {', '.join(keywords)}")
     print(f"   搜索结果: {search_csv}")
     print(f"   爬取结果: {crawl_csv}")
+
+    return crawl_csv

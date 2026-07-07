@@ -91,6 +91,8 @@ class Request(object):
         '/aweme/v1/web/aweme/favorite/',
         '/aweme/v2/web/module/feed/',
         '/aweme/v1/web/follow/feed/',
+        '/aweme/v1/web/general/search/single/',
+        '/aweme/v1/web/search/item/',
     ]
     SIGN = None  # 延迟编译，仅 JS 回退路径需要
     WEBID = ''
@@ -101,6 +103,7 @@ class Request(object):
     )
 
     def __init__(self, cookie='', UA=''):
+        self.filepath = os.path.dirname(os.path.abspath(__file__))
         self.COOKIES = get_cookie_dict(cookie)
         if UA:  # 如果需要访问搜索页面源码等内容，需要提供cookie对应的UA
             version = UA.split(' Chrome/')[1].split(' ')[0]
@@ -190,7 +193,7 @@ class Request(object):
             192 长度的 a_bogus 字符串
         """
         try:
-            from utils.abogus_pure import generate_abogus
+            from .abogus_pure import generate_abogus
             import time
 
             if timestamp is None:
@@ -319,7 +322,9 @@ class Request(object):
         # 注意：签名 URL 必须与实际请求 URL（含域名）完全一致
         bdms_uris = ['/aweme/v1/web/tab/feed/', '/aweme/v2/web/module/feed/',
                      '/aweme/v1/web/locate/post/', '/aweme/v1/web/commit/item/digg/',
-                     '/aweme/v1/web/aweme/favorite/', '/aweme/v1/web/follow/feed/']
+                     '/aweme/v1/web/aweme/favorite/', '/aweme/v1/web/follow/feed/',
+                     '/aweme/v1/web/general/search/single/',
+                     '/aweme/v1/web/search/item/']
         if uri in bdms_uris:
             sign_method = 'POST' if uri in post_uris else 'GET'
             sign_body = ''
