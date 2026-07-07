@@ -115,7 +115,10 @@ class DouyinSearcher:
         return results
 
     def _search_cdp(self, keyword: str, pages: int = 5) -> list[dict]:
-        """通过 CDP 浏览器搜索（需要 Chrome 开启远程调试）"""
+        """通过 CDP 浏览器搜索（利用浏览器内置环境绕过签名）
+
+        原理：在已登录的 Chrome 中执行 fetch，浏览器自动处理 Cookie/签名。
+        """
         try:
             from ..lib.cdp2 import CDP, get_ws
         except ImportError:
@@ -124,10 +127,8 @@ class DouyinSearcher:
 
         ws = get_ws()
         if not ws:
-            print("  ❌ 未找到 Chrome 调试端口")
-            print("  请用以下命令启动 Chrome：")
-            print('  chrome.exe --remote-debugging-port=9222 --remote-allow-origins=*')
-            print("  然后打开 www.douyin.com 并登录")
+            print("  ❌ 未找到 Chrome 调试端口 (localhost:9222)")
+            print("  请启动 Chrome 调试模式后重试")
             return []
 
         cdp = CDP(ws)
@@ -138,93 +139,97 @@ class DouyinSearcher:
         all_ids = set()
 
         try:
-            for page in range(min(pages, 5)):  # CDP 最多 5 页避免太慢
-                if page == 0:
-                    # 第一页：导航到搜索页
-                    import urllib.parse
-                    search_url = f'https://www.douyin.com/search/{urllib.parse.quote(keyword)}?type=general'
-                    cdp.cmd("Page.navigate", {"url": search_url})
-                    time.sleep(5)  # 等页面渲染
-                else:
-                    # 翻页：滚动到底部加载更多
-                    cdp.cmd("Runtime.evaluate", {
-                        "expression": "window.scrollTo(0, document.body.scrollHeight)",
-                        "returnByValue": True
-                    })
-                    time.sleep(3)
+            # 确保已在抖音首页建立会话
+            cdp.cmd("Page.navigate", {"url": "https://www.douyin.com/?recommend=1"})
+            time.sleep(4)
 
-                # 提取视频 ID（从 React fiber）
-                js_extract = """
-                (function(){
-                  var cards = document.querySelectorAll('.search-result-card');
-                  var ids = [];
-                  var descs = [];
+            for page in range(min(pages, 10)):
+                offset = page * 20
+                # 用浏览器 fetch 直接调搜索 API（无需签名）
+                js_search = f"""
+                (async function(){{
+                  try {{
+                    var url = '/aweme/v1/web/general/search/single/?keyword={keyword}' +
+                              '&search_channel=aweme_general&offset={offset}&count=20' +
+                              '&aid=6383&device_platform=webapp&channel=channel_pc_web&pc_client_type=1';
+                    var resp = await fetch(url, {{
+                      credentials: 'include',
+                      headers: {{'Accept': 'application/json', 'Referer': 'https://www.douyin.com/search/' + encodeURIComponent('{keyword}') + '?type=general'}}
+                    }});
+                    var data = await resp.json();
+                    var result = {{status_code: data.status_code}};
 
-                  function deepFind(obj, depth) {
-                    if (!obj || depth > 50 || typeof obj !== 'object') return null;
-                    if (obj.aweme_id || obj.awemeId) {
-                      return String(obj.aweme_id || obj.awemeId);
-                    }
-                    var keys = Object.keys(obj);
-                    for (var i = 0; i < keys.length; i++) {
-                      var k = keys[i];
-                      if (k === 'aweme_id' || k === 'awemeId') return String(obj[k]);
-                      try {
-                        if (typeof obj[k] === 'object' && obj[k] !== null && k !== 'owner' && k !== 'parent' && k !== 'source') {
-                          var result = deepFind(obj[k], depth + 1);
-                          if (result) return result;
-                        }
-                      } catch(e) {}
-                    }
-                    return null;
-                  }
+                    if (data.search_nil_info && data.search_nil_info.search_nil_type) {{
+                      result.nil_type = data.search_nil_info.search_nil_type;
+                    }}
 
-                  cards.forEach(function(card) {
-                    var fiberKey = Object.keys(card).find(function(k){
-                      return k.startsWith('__reactFiber');
-                    });
-                    var videoId = null;
-                    if (fiberKey) videoId = deepFind(card[fiberKey], 0);
-                    if (videoId) {
-                      ids.push(videoId);
-                      var text = card.textContent.replace(/\\s+/g, ' ').trim().substring(0, 100);
-                      descs.push(text);
-                    }
-                  });
-                  return JSON.stringify({ids: ids, descs: descs});
-                })()
+                    if (data.data && Array.isArray(data.data)) {{
+                      result.count = data.data.length;
+                      result.items = [];
+                      data.data.forEach(function(item) {{
+                        var info = item.aweme_info || {{}};
+                        var stats = info.statistics || {{}};
+                        result.items.push({{
+                          aweme_id: String(info.aweme_id || ''),
+                          desc: (info.desc || '').substring(0, 200),
+                          author: (info.author || {{}}).nickname || '',
+                          digg_count: stats.digg_count || 0,
+                          comment_count: stats.comment_count || 0,
+                        }});
+                      }});
+                    }}
+                    return JSON.stringify(result);
+                  }} catch(e) {{
+                    return JSON.stringify({{error: e.message}});
+                  }}
+                }})()
                 """
 
-                result = cdp.cmd("Runtime.evaluate", {
-                    "expression": js_extract,
-                    "returnByValue": True
+                r = cdp.cmd("Runtime.evaluate", {
+                    "expression": js_search,
+                    "returnByValue": True,
+                    "awaitPromise": True,
                 })
 
-                value = result.get("result", {}).get("result", {}).get("value", "")
-                if value:
-                    import json
-                    data = json.loads(value)
-                    ids = data.get("ids", [])
-                    descs = data.get("descs", [])
+                value = r.get("result", {}).get("result", {}).get("value", "")
+                if not value:
+                    break
 
-                    new_count = 0
-                    for i, vid in enumerate(ids):
-                        if vid not in all_ids:
-                            all_ids.add(vid)
-                            desc = descs[i] if i < len(descs) else ""
-                            results.append({
-                                "aweme_id": vid,
-                                "desc": desc[:120],
-                                "author": "",
-                                "url": f"https://www.douyin.com/video/{vid}",
-                                "keyword": keyword,
-                            })
-                            new_count += 1
+                import json
+                data = json.loads(value)
 
-                    print(f"  📄 '{keyword}' 第{page+1}页: {len(ids)}条, 新增 {new_count} 条")
+                if data.get("nil_type") == "verify_check":
+                    print(f"  ⚠️ '{keyword}' CDP搜索也被风控，请刷新页面重试")
+                    break
 
-                    if len(ids) < 10:
-                        break  # 不够一页，可能没有更多结果了
+                if data.get("error"):
+                    print(f"  ❌ '{keyword}' JS错误: {data['error']}")
+                    break
+
+                items = data.get("items", [])
+                if not items:
+                    break
+
+                new_count = 0
+                for item in items:
+                    aid = item["aweme_id"]
+                    if aid and aid not in all_ids:
+                        all_ids.add(aid)
+                        results.append({
+                            "aweme_id": aid,
+                            "desc": item["desc"],
+                            "author": item["author"],
+                            "url": f"https://www.douyin.com/video/{aid}",
+                            "keyword": keyword,
+                        })
+                        new_count += 1
+
+                print(f"  📄 '{keyword}' 第{page+1}页: {len(items)}条, 新增 {new_count} 条")
+
+                if len(items) < 15:
+                    break
+
+                time.sleep(2)  # 翻页间隔
 
         finally:
             cdp.close()
