@@ -450,10 +450,20 @@ def build_output(rows, label_results):
         new_row["一句话总结"] = labels.get("一句话总结", "")
         new_row["AI原始JSON"] = json.dumps(labels, ensure_ascii=False)
 
-        # 保留前5条清洗后的评论
-        for i in range(1, 6):
-            for sfx in [f"评论{i}", f"评论{i}点赞", f"评论{i}回复数", f"评论{i}用户"]:
-                new_row[sfx] = row.get(sfx, "")
+        # 保留完整评论（最多20条，含时间/属地/子回复）
+        for i in range(1, 21):
+            text = row.get(f"评论{i}", "").strip()
+            if text:
+                for sfx in [f"评论{i}", f"评论{i}点赞", f"评论{i}回复数",
+                           f"评论{i}用户", f"评论{i}时间", f"评论{i}属地",
+                           f"评论{i}子回复1", f"评论{i}子回复1用户", f"评论{i}子回复1点赞",
+                           f"评论{i}子回复2", f"评论{i}子回复2用户", f"评论{i}子回复2点赞",
+                           f"评论{i}子回复3", f"评论{i}子回复3用户", f"评论{i}子回复3点赞"]:
+                    new_row[sfx] = row.get(sfx, "")
+            # 始终保留评论JSON
+            json_key = "评论JSON"
+            if json_key in row:
+                new_row[json_key] = row.get(json_key, "")
 
         output_rows.append(new_row)
 
@@ -563,7 +573,14 @@ def main():
     output_rows = build_output(rows, label_results)
 
     if output_rows:
-        fieldnames = list(output_rows[0].keys())
+        # 取所有行的最大列集合（避免第一行评论少导致后续列丢失）
+        fieldnames = []
+        seen = set()
+        for r in output_rows:
+            for k in r:
+                if k not in seen:
+                    seen.add(k)
+                    fieldnames.append(k)
         with open(LABELED_CSV, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()

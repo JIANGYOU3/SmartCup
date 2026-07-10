@@ -34,13 +34,22 @@ class DouyinSearcher:
         self.api = Request(cookie=self.cookie)
         self.sort_type = sort_type
 
-    def search(self, keyword: str, pages: int = 5) -> list[dict]:
+    def search(self, keyword: str, pages: int = 5,
+               cdp=None, navigated: bool = False) -> list[dict]:
         """
         搜索关键词，返回视频列表。
         优先尝试 API 搜索，失败则回退到 CDP 浏览器搜索。
 
         返回 list[dict]，每项包含: aweme_id, desc, author, url
+
+        Args:
+            cdp: 可复用的 CDP 连接（批量搜索时传入）
+            navigated: CDP 是否已导航到抖音首页
         """
+        # 如果有共享 CDP 连接，直接用它（跳过 API）
+        if cdp is not None:
+            return self._search_cdp(keyword, pages, cdp=cdp, navigated=navigated)
+
         # 先尝试 API
         results = self._search_api(keyword, pages)
         if results:
@@ -121,10 +130,15 @@ class DouyinSearcher:
 
         return results
 
-    def _search_cdp(self, keyword: str, pages: int = 5) -> list[dict]:
+    def _search_cdp(self, keyword: str, pages: int = 5,
+                     cdp=None, navigated: bool = False) -> list[dict]:
         """通过 CDP 浏览器搜索（利用浏览器内置环境绕过签名）
 
         原理：在已登录的 Chrome 中执行 fetch，浏览器自动处理 Cookie/签名。
+
+        Args:
+            cdp: 可复用的 CDP 连接（批量搜索时传入，跳过连接建立+导航）
+            navigated: 是否已导航到抖音首页
         """
         try:
             from ..lib.cdp2 import CDP, get_ws
@@ -132,23 +146,27 @@ class DouyinSearcher:
             print("  ❌ CDP 模块不可用，请安装 websocket-client")
             return []
 
-        ws = get_ws()
-        if not ws:
-            print("  ❌ 未找到 Chrome 调试端口 (localhost:9222)")
-            print("  请启动 Chrome 调试模式后重试")
-            return []
+        own_cdp = cdp is None
 
-        cdp = CDP(ws)
-        cdp.cmd("Page.enable")
-        cdp.cmd("Runtime.enable")
+        if own_cdp:
+            ws = get_ws()
+            if not ws:
+                print("  ❌ 未找到 Chrome 调试端口 (localhost:9222)")
+                print("  请启动 Chrome 调试模式后重试")
+                return []
+
+            cdp = CDP(ws)
+            cdp.cmd("Page.enable")
+            cdp.cmd("Runtime.enable")
 
         results = []
         all_ids = set()
 
         try:
-            # 确保已在抖音首页建立会话
-            cdp.cmd("Page.navigate", {"url": "https://www.douyin.com/?recommend=1"})
-            time.sleep(4)
+            # 仅在首次连接时导航到抖音首页建立会话
+            if not navigated:
+                cdp.cmd("Page.navigate", {"url": "https://www.douyin.com/?recommend=1"})
+                time.sleep(5)
 
             for page in range(min(pages, 10)):
                 offset = page * 20
@@ -269,24 +287,58 @@ class DouyinSearcher:
                 time.sleep(2)  # 翻页间隔
 
         finally:
-            cdp.close()
+            if own_cdp:
+                cdp.close()
 
         return results
 
     def search_multi(self, keywords: list[str], pages: int = 5) -> list[dict]:
-        """多关键词搜索，自动去重"""
+        """多关键词搜索，自动去重。
+
+        先尝试 API 搜索。一旦 API 被风控，后续全部直接走 CDP。
+        CDP 连接失败的词自动重试一次。
+        """
         seen = set()
         all_results = []
+        api_blocked = False
+        retry_keywords = []
 
         for kw in keywords:
             print(f"  搜索: {kw}", flush=True)
-            results = self.search(kw, pages)
+
+            if api_blocked:
+                results = self._search_cdp(kw, pages)
+            else:
+                results = self._search_api(kw, pages)
+                if not results:
+                    api_blocked = True
+                    print(f"  ⚠️ API 搜索被风控，后续关键词将直接使用 CDP 搜索...")
+                    results = self._search_cdp(kw, pages)
+
             for r in results:
                 if r["aweme_id"] not in seen:
                     seen.add(r["aweme_id"])
                     r["keyword"] = kw
                     all_results.append(r)
             print(f"    → {len(results)} 条（去重后累计 {len(all_results)}）", flush=True)
+
+            # 记录 CDP 失败的词（0 结果且不是真无结果）
+            if not results and api_blocked:
+                retry_keywords.append(kw)
+
+        # 重试失败的词（CDP WebSocket 偶发不稳定）
+        if retry_keywords:
+            print(f"\n  🔄 重试 {len(retry_keywords)} 个失败关键词...")
+            for kw in retry_keywords:
+                print(f"    重试: {kw}", flush=True)
+                time.sleep(2)  # 短暂间隔避免 Chrome 连接过载
+                results = self._search_cdp(kw, pages)
+                for r in results:
+                    if r["aweme_id"] not in seen:
+                        seen.add(r["aweme_id"])
+                        r["keyword"] = kw
+                        all_results.append(r)
+                print(f"      → {len(results)} 条（去重后累计 {len(all_results)}）", flush=True)
 
         return all_results
 
