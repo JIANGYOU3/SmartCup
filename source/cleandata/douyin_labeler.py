@@ -451,19 +451,17 @@ def build_output(rows, label_results):
         new_row["AI原始JSON"] = json.dumps(labels, ensure_ascii=False)
 
         # 保留完整评论（最多20条，含时间/属地/子回复）
+        # ⚠️ 始终添加所有评论块，即使内容为空 — 否则不同行的列集合不一致，导致 CSV 列顺序错乱
+        COMMENT_FIELDS = ["", "点赞", "回复数", "用户", "时间", "属地",
+                         "子回复1", "子回复1用户", "子回复1点赞",
+                         "子回复2", "子回复2用户", "子回复2点赞",
+                         "子回复3", "子回复3用户", "子回复3点赞"]
         for i in range(1, 21):
-            text = row.get(f"评论{i}", "").strip()
-            if text:
-                for sfx in [f"评论{i}", f"评论{i}点赞", f"评论{i}回复数",
-                           f"评论{i}用户", f"评论{i}时间", f"评论{i}属地",
-                           f"评论{i}子回复1", f"评论{i}子回复1用户", f"评论{i}子回复1点赞",
-                           f"评论{i}子回复2", f"评论{i}子回复2用户", f"评论{i}子回复2点赞",
-                           f"评论{i}子回复3", f"评论{i}子回复3用户", f"评论{i}子回复3点赞"]:
-                    new_row[sfx] = row.get(sfx, "")
-            # 始终保留评论JSON
-            json_key = "评论JSON"
-            if json_key in row:
-                new_row[json_key] = row.get(json_key, "")
+            for sfx in COMMENT_FIELDS:
+                key = f"评论{i}{sfx}"
+                new_row[key] = row.get(key, "")
+        # 评论JSON（每行一个，紧跟评论1之后）
+        new_row["评论JSON"] = row.get("评论JSON", "")
 
         output_rows.append(new_row)
 
@@ -573,14 +571,25 @@ def main():
     output_rows = build_output(rows, label_results)
 
     if output_rows:
-        # 取所有行的最大列集合（避免第一行评论少导致后续列丢失）
-        fieldnames = []
-        seen = set()
-        for r in output_rows:
-            for k in r:
-                if k not in seen:
-                    seen.add(k)
-                    fieldnames.append(k)
+        # 预定义列顺序（确保跨运行一致性，不受各行数据差异影响）
+        fieldnames = [
+            "视频标题", "视频文案", "作者昵称", "作者粉丝量",
+            "点赞数", "评论数", "收藏数", "分享数", "发布时间", "视频链接",
+            "内容标签", "相关性等级", "相关性理由", "话题类别", "用户情绪",
+            "需求痛点", "数据价值等级", "数据价值理由", "关键词", "一句话总结",
+            "AI原始JSON",
+        ]
+        # 评论块：1-20，每块 15 个字段（评论内容 + 点赞/回复数/用户/时间/属地 + 3条子回复×3字段）
+        COMMENT_FIELDS = ["", "点赞", "回复数", "用户", "时间", "属地",
+                         "子回复1", "子回复1用户", "子回复1点赞",
+                         "子回复2", "子回复2用户", "子回复2点赞",
+                         "子回复3", "子回复3用户", "子回复3点赞"]
+        for i in range(1, 21):
+            for sfx in COMMENT_FIELDS:
+                fieldnames.append(f"评论{i}{sfx}")
+            # 每轮评论后紧接评论JSON（仅第1条评论后加，后续不加）
+            if i == 1:
+                fieldnames.append("评论JSON")
         with open(LABELED_CSV, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
