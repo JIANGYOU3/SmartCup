@@ -87,7 +87,8 @@ def apply_excel_style(
 
     # ── 冻结表头 + 自动筛选 ──
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(fieldnames))}{len(rows) + 1}"
+    if fieldnames:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(fieldnames))}{len(rows) + 1}"
 
 
 def csv_to_excel(
@@ -110,7 +111,7 @@ def csv_to_excel(
 
     with open(csv_path, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames
+        fieldnames = reader.fieldnames or []
         rows = list(reader)
 
     wb = Workbook()

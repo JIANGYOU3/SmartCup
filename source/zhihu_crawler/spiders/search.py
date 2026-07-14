@@ -13,6 +13,7 @@ import re
 import time
 import random
 import json
+from pathlib import Path
 from typing import Iterator
 from urllib.parse import quote
 

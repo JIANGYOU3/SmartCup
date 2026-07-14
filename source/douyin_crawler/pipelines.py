@@ -20,7 +20,7 @@ class CsvPipeline:
 
     def open(self):
         self._file = open(self.output_path, "w", encoding=config.OUTPUT_ENCODING, newline="")
-        self._writer = csv.DictWriter(self._file, fieldnames=DouyinVideo.FIELDNAMES)
+        self._writer = csv.DictWriter(self._file, fieldnames=DouyinVideo.get_fieldnames())
         self._writer.writeheader()
         self._file.flush()
 

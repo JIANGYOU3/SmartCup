@@ -11,7 +11,12 @@ import time
 
 
 def get_ws():
-    d = json.load(urllib.request.urlopen("http://localhost:9222/json/list"))
+    """Return the Douyin page CDP WebSocket URL, or None if Chrome is unavailable."""
+    try:
+        with urllib.request.urlopen("http://localhost:9222/json/list", timeout=3) as response:
+            d = json.load(response)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
     for t in d:
         if t.get("type") == "page" and "douyin" in t.get("url", ""):
             return t["webSocketDebuggerUrl"]

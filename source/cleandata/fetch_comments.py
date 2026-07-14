@@ -127,13 +127,13 @@ print(f"🔍 需爬评论: {len(to_crawl)} 条问答帖（评论>0）")
 print(f"⏭️ 跳过专栏文章: {article_skip} 条（API封禁）")
 print(f"⏭️ 零评论帖子: {zero_cmt} 条")
 
+comment_data = {}  # link -> [comment1_str, comment2_str, ...]
+
 if not to_crawl:
     print("⚠️ 无需爬取，仅做排序")
 else:
     print(f"\n🐌 开始爬取评论（约 {len(to_crawl)} 条帖子，每条 2-3s）...")
     print()
-    comment_data = {}  # link -> [comment1_str, comment2_str, ...]
-
     pbar = tqdm(total=len(to_crawl), desc="爬评论", unit="帖")
     for r in to_crawl:
         url = r["问答链接"]
@@ -157,7 +157,7 @@ for comments in comment_data.values():
 print(f"   最多评论列数: {max_cols}")
 
 # ── 6. 输出 ──
-base_fields = list(rows[0].keys())
+base_fields = list(rows[0].keys()) if rows else []
 comment_fields = [f"评论{i+1}" for i in range(max_cols)] if max_cols > 0 else []
 all_fields = base_fields + comment_fields
 
@@ -238,7 +238,8 @@ for ci, name in enumerate(all_fields, 1):
         ws.column_dimensions[get_column_letter(ci)].width = 20
 
 ws.freeze_panes = "A2"
-ws.auto_filter.ref = f"A1:{get_column_letter(len(all_fields))}{len(rows) + 1}"
+if all_fields:
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(all_fields))}{len(rows) + 1}"
 wb.save(excel_path)
 print(f"✅ Excel: {excel_path}")
 print(f"\n{'='*60}")

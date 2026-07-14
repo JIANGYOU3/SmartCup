@@ -125,13 +125,15 @@ def build_user_prompt(title: str, content: str) -> str:
 # ──────────────────────────────────────────────
 
 def extract_content_text(record: dict) -> str:
-    """从记录中提取合并后的正文文本"""
+    """从旧浏览器导出或当前知乎爬虫输出中提取正文。"""
     parts = [
         record.get("richtext", ""),
         record.get("richtext2", ""),
         record.get("richtext3", ""),
         record.get("richtext4", ""),
         record.get("内容5", ""),
+        record.get("问题内容", ""),
+        record.get("回答内容", ""),
     ]
     return " ".join(p for p in parts if p).strip()
 
@@ -239,7 +241,7 @@ def save_progress(output_dir: Path, results: dict[int, dict]):
 
 def process_record(idx: int, record: dict, labeler: DeepSeekLabeler) -> dict:
     """处理单条记录（供线程池调用），返回结果字典"""
-    title = clean_text(record.get("highlight", ""))
+    title = clean_text(record.get("highlight", "") or record.get("问题标题", ""))
     content = extract_content_text(record)
 
     # 1. 污染检测
@@ -267,11 +269,11 @@ def process_record(idx: int, record: dict, labeler: DeepSeekLabeler) -> dict:
 
 def build_output_row(record: dict, ai_result: dict) -> dict:
     """合并原始数据和 AI 结果，输出 7 字段"""
-    title = clean_text(record.get("highlight", ""))
+    title = clean_text(record.get("highlight", "") or record.get("问题标题", ""))
     content = extract_content_text(record)
-    link = record.get("内容", "").strip()
-    likes = extract_number(record.get("button", ""))
-    comments = extract_number(record.get("内容6", ""))
+    link = (record.get("内容", "") or record.get("问答链接", "")).strip()
+    likes = extract_number(record.get("button", "") or record.get("赞同数", ""))
+    comments = extract_number(record.get("内容6", "") or record.get("评论数", ""))
 
     labels = ai_result.get("labels", [])
     evidence = ai_result.get("evidence", {})
@@ -331,7 +333,7 @@ def main():
     polluted_count = 0
     clean_indices = []
     for i, rec in enumerate(records):
-        title = clean_text(rec.get("highlight", ""))
+        title = clean_text(rec.get("highlight", "") or rec.get("问题标题", ""))
         content = extract_content_text(rec)
         reason = is_polluted(title, content)
         if reason:
@@ -345,7 +347,7 @@ def main():
         print("=== Dry-Run: 前10条预览 ===")
         for i in range(min(10, len(records))):
             rec = records[i]
-            title = clean_text(rec.get("highlight", ""))
+            title = clean_text(rec.get("highlight", "") or rec.get("问题标题", ""))
             content = extract_content_text(rec)
             reason = is_polluted(title, content)
             status = f"❌ {reason}" if reason else "✅ 干净"
@@ -417,7 +419,7 @@ def main():
     # ── 5. 处理污染记录（补全结果） ──
     for i, rec in enumerate(records):
         if i not in results:
-            title = clean_text(rec.get("highlight", ""))
+            title = clean_text(rec.get("highlight", "") or rec.get("问题标题", ""))
             content = extract_content_text(rec)
             reason = is_polluted(title, content) or "未知"
             results[i] = {
