@@ -127,7 +127,8 @@ class DouyinScraper:
             result["share_count"] = stats.get("share_count", 0) or node.get("share_count", 0) or 0
             result["collect_count"] = stats.get("collect_count", 0) or node.get("collect_count", 0) or 0
             result["play_count"] = stats.get("play_count", 0) or node.get("play_count", 0) or 0
-            result["duration"] = node.get("duration", 0) or 0
+            # Douyin returns duration in milliseconds; public output uses seconds.
+            result["duration"] = (node.get("duration", 0) or 0) / 1000
             result["create_time"] = node.get("create_time", 0) or 0
 
             if result.get("create_time"):
@@ -171,7 +172,8 @@ class DouyinScraper:
         result["author"] = author.get("nickname", "")
         result["author_follower_count"] = author.get("follower_count", 0) or 0
         result["author_uid"] = author.get("uid", "")
-        result["duration"] = detail.get("duration", 0) or 0
+        # Douyin returns duration in milliseconds; public output uses seconds.
+        result["duration"] = (detail.get("duration", 0) or 0) / 1000
 
         # 互动数据优先从 statistics 子对象提取
         stats = detail.get("statistics", {}) or {}

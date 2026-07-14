@@ -10,7 +10,9 @@ OUTPUT = "res/data/zhihu/output/爬取结果_清洗后.csv"
 NSFW = NSFW_KEYWORDS
 
 with open(INPUT, "r", encoding="utf-8-sig") as f:
-    rows = list(csv.DictReader(f))
+    reader = csv.DictReader(f)
+    rows = list(reader)
+    fieldnames = reader.fieldnames or []
 
 total = len(rows)
 kept = []
@@ -50,7 +52,7 @@ for r in rows:
 
 # 写入
 with open(OUTPUT, "w", encoding="utf-8-sig", newline="") as f:
-    w = csv.DictWriter(f, fieldnames=rows[0].keys())
+    w = csv.DictWriter(f, fieldnames=fieldnames)
     w.writeheader()
     w.writerows(kept)
 

@@ -72,3 +72,4 @@ dependencies:
       - typing-extensions==4.15.0
       - ujson
       - urllib3==2.7.0
+      - websocket-client

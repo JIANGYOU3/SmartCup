@@ -11,6 +11,26 @@
 conda run -n SmartCup python <script.py> [args...]
 ```
 
+## 抖音 CDP 前置条件（AI 助手必须先检查）
+
+抖音关键词搜索的签名 API 可能被风控；出现空结果或 `verify_check` 时，使用 CDP 浏览器回退。执行抖音搜索前，先让用户在 Windows PowerShell 启动独立 Chrome 并登录抖音：
+
+```powershell
+& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --remote-allow-origins=* `
+  --user-data-dir="$env:TEMP\smartcup-chrome" `
+  "https://www.douyin.com"
+```
+
+再从项目终端检查：
+
+```bash
+conda run -n SmartCup python -c "from source.douyin_crawler.lib.cdp2 import get_ws; print('READY' if get_ws() else 'NOT_RUNNING')"
+```
+
+仅在输出 `READY` 后运行 `source.douyin_crawler.search_main`。Windows 不使用 `google-chrome` 命令；若 CDP WebSocket 403，说明 Chrome 启动命令缺少 `--remote-allow-origins=*`。
+
 ## 项目结构
 
 ```

@@ -50,9 +50,10 @@ OUTPUT_DIR = DATA_DIR / "output"
 
 # 自动查找所有爬取结果 CSV
 def find_crawl_csvs():
-    """找到所有爬取结果 CSV"""
-    csvs = sorted(OUTPUT_DIR.glob("爬取结果_*.csv"))
-    return csvs
+    """找到原始爬取 CSV，不把本脚本生成的中间结果再次并入。"""
+    generated = {MERGED_CSV.name, CLEANED_CSV.name}
+    return sorted(path for path in OUTPUT_DIR.glob("爬取结果_*.csv")
+                  if path.name not in generated)
 
 MERGED_CSV = OUTPUT_DIR / "爬取结果_合并.csv"
 CLEANED_CSV = OUTPUT_DIR / "爬取结果_清洗后.csv"
@@ -101,14 +102,26 @@ def clean_comment(text: str) -> str:
 # ── 数据处理 ───────────────────────────────────────
 
 def merge_crawls():
-    """合并所有爬取 CSV"""
+    """合并所有爬取 CSV，并为同一视频保留信息最完整的一条。"""
     csvs = find_crawl_csvs()
     if not csvs:
         print("❌ 未找到爬取结果 CSV")
         return None
 
-    seen_urls = set()
-    all_rows = []
+    rows_by_url = {}
+    url_order = []
+
+    def quality(row: dict) -> tuple[int, int, int, int]:
+        """Prefer rows with fetched comments, then generally richer rows."""
+        comment_fields = sum(bool(row.get(f"评论{i}", "").strip()) for i in range(1, 21))
+        has_comment_json = int(bool(row.get("评论JSON", "").strip()))
+        populated = sum(bool(str(value).strip()) for value in row.values())
+        try:
+            engagement = sum(int(row.get(key, 0) or 0)
+                             for key in ("点赞数", "评论数", "收藏数", "分享数"))
+        except ValueError:
+            engagement = 0
+        return has_comment_json, comment_fields, populated, engagement
 
     for csv_path in csvs:
         try:
@@ -116,15 +129,25 @@ def merge_crawls():
                 reader = csv.DictReader(f)
                 for row in reader:
                     url = row.get("视频链接", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_rows.append(row)
+                    if not url:
+                        continue
+                    if url not in rows_by_url:
+                        rows_by_url[url] = row
+                        url_order.append(url)
+                    elif quality(row) > quality(rows_by_url[url]):
+                        rows_by_url[url] = row
         except Exception as e:
             print(f"  ⚠️ 读取 {csv_path.name} 失败: {e}")
 
-    # 写合并文件
+    all_rows = [rows_by_url[url] for url in url_order]
+
+    # Build a union schema: source files may differ by whether comments were fetched.
     if all_rows:
-        fieldnames = list(all_rows[0].keys())
+        fieldnames = []
+        for row in all_rows:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
         with open(MERGED_CSV, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()
@@ -171,7 +194,11 @@ def clean_data(rows):
 
     # 写清洗后文件
     if cleaned:
-        fieldnames = list(cleaned[0].keys())
+        fieldnames = []
+        for row in cleaned:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
         with open(CLEANED_CSV, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
             writer.writeheader()

@@ -4,6 +4,16 @@ import csv
 from pathlib import Path
 
 
+def _find_link_column(header: list[str], default_index: int) -> int:
+    """Find a link column in both crawler and search-result CSV schemas."""
+    normalized = [h.strip().replace("﻿", "") for h in header]
+    # Prefer explicit link column names.  Older browser exports use "内容".
+    for candidate in ("链接", "url", "URL", "视频链接", "问答链接", "内容"):
+        if candidate in normalized:
+            return normalized.index(candidate)
+    return default_index
+
+
 def parse_multiline_csv(csv_path: Path, link_col_index: int = 1) -> list[dict]:
     """
     解析包含跨行记录的 CSV 文件。
@@ -50,12 +60,7 @@ def extract_links_from_csv(csv_path: Path, link_col_index: int = 1) -> list[str]
         reader = csv.reader(f)
         header = next(reader)
 
-        # 自动检测链接列
-        col = link_col_index
-        for i, h in enumerate(header):
-            if "内容" in h.strip().replace("﻿", ""):
-                col = i
-                break
+        col = _find_link_column(header, link_col_index)
 
         current = None
         for row in reader:

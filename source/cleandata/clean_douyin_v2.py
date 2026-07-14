@@ -143,7 +143,7 @@ def main():
     with open(args.input, encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
-        fieldnames = reader.fieldnames
+        fieldnames = reader.fieldnames or []
 
     print(f"📂 读取: {len(rows)} 条")
     stats = Counter()

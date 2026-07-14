@@ -306,7 +306,7 @@ conda run -n SmartCup python -u -m source.zhihu_crawler.main --no-resume
 ### 5.2 抖音爬虫是怎么工作的
 
 ```
-关键词 → 抖音搜索 API（需要 a_bogus 签名）
+关键词 → 抖音搜索 API（优先 CDP 浏览器环境；API 方案需要 a_bogus 签名）
   │
   ├─ 搜索阶段
   │     → 调用搜索接口，翻页获取视频列表
@@ -325,7 +325,32 @@ conda run -n SmartCup python -u -m source.zhihu_crawler.main --no-resume
 - 抖音需要 **a_bogus 签名**（一个反爬参数），项目已内置纯 Python 实现，无需额外配置
 - 抖音 Cookie 有严格的时效性，过期后爬虫会失败
 
-### 5.3 抖音输出字段（14+ 基础字段 + 评论展开列）
+### 5.3 每次运行前：启动 Chrome 调试模式（必做）
+
+抖音搜索 API 经常触发风控。项目会自动回退到 **CDP 浏览器搜索**：由已登录的 Chrome 发起请求，因此需要先启动一个带调试端口的独立浏览器窗口。
+
+1. 在 Windows PowerShell 运行以下命令（Windows 不支持 `google-chrome` 命令）：
+
+```powershell
+& "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" `
+  --remote-debugging-port=9222 `
+  --remote-allow-origins=* `
+  --user-data-dir="$env:TEMP\smartcup-chrome" `
+  "https://www.douyin.com"
+```
+
+2. 在新打开的 Chrome 中登录抖音，保持 `www.douyin.com` 页面打开。
+3. 回到项目终端，执行验证命令；看到 `READY` 后再开始搜索：
+
+```bash
+conda run -n SmartCup python -c "from source.douyin_crawler.lib.cdp2 import get_ws; print('READY' if get_ws() else 'NOT_RUNNING')"
+```
+
+若 Chrome 在 32 位目录，把 `$env:ProgramFiles` 改为 `${env:ProgramFiles(x86)}`；也可改用 Edge 的 `msedge.exe`。`NOT_RUNNING` 表示端口未启动或当前 WSL/终端无法连接；WebSocket 403 表示启动参数漏了 `--remote-allow-origins=*`。
+
+> 安全提示：上述参数只应用于临时的 `smartcup-chrome` 浏览器目录，不要用于日常 Chrome 配置。
+
+### 5.4 抖音输出字段（14+ 基础字段 + 评论展开列）
 
 **基础字段**：
 
@@ -349,7 +374,7 @@ conda run -n SmartCup python -u -m source.zhihu_crawler.main --no-resume
 **评论字段**（使用 `--with-comments` 时展开，每条评论占 15 列）：
 评论N, 评论N点赞, 评论N回复数, 评论N用户, 评论N时间, 评论N属地, 评论N子回复1~3（含用户+点赞）
 
-### 5.4 抖音运行命令
+### 5.5 抖音运行命令
 
 ```bash
 # 关键词搜索 + 自动爬取（基础版，不抓评论）
@@ -378,11 +403,12 @@ conda run -n SmartCup python -u -m source.douyin_crawler.main \
   --output res/data/douyin/output/爬取结果.csv
 ```
 
-### 5.5 抖音爬虫注意事项
+### 5.6 抖音爬虫注意事项
 
 - **并发限制**：默认只有 2 个并发（`MAX_WORKERS = 2`），不要调高，否则容易触发风控
 - **请求间隔**：每条间隔 3 秒 + 随机延迟
 - **Cookie 过期**：抖音 Cookie 通常几小时到一天就会过期，爬取失败时优先检查
+- **CDP 前置条件**：关键词搜索前先启动调试 Chrome 并确认验证命令输出 `READY`
 - **排序方式**：`--sort 0` 综合、`--sort 1` 最多点赞（默认）、`--sort 2` 最新发布
 
 ---
@@ -768,7 +794,17 @@ def crawl_item(url: str, keyword: str = "") -> TaobaoItem | None:
 
 ---
 
-### 坑 8：抖音 Cookie 过期 🆕
+### 坑 8：抖音搜索返回空结果或提示 Chrome/CDP 不可用 🆕
+
+**现象**：搜索 API 返回空结果、提示 `verify_check`，或终端提示找不到 `localhost:9222` / WebSocket 403。
+
+**原因**：抖音搜索被风控后需要 CDP 回退；Chrome 未以调试模式启动、未登录抖音，或缺少 `--remote-allow-origins=*` 参数。
+
+**解决**：按本章“每次运行前：启动 Chrome 调试模式”启动独立 Chrome，登录后在项目终端运行 `get_ws()` 验证命令，确认输出 `READY`。Windows 请使用 `chrome.exe`，不要使用 Linux 的 `google-chrome` 命令。
+
+---
+
+### 坑 9：抖音 Cookie 过期 🆕
 
 **现象**：之前能正常爬取，过几小时后再跑就全部失败。
 
@@ -778,7 +814,7 @@ def crawl_item(url: str, keyword: str = "") -> TaobaoItem | None:
 
 ---
 
-### 坑 9：抖音 RENDER_DATA 解密 🆕
+### 坑 10：抖音 RENDER_DATA 解密 🆕
 
 **现象**：下载了抖音视频页面的 HTML，但数据全部是乱的。
 

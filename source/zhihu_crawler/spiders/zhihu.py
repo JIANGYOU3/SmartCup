@@ -174,6 +174,8 @@ class ZhihuScraper:
         voteup = answer_or_article.get("voteupCount") or answer_or_article.get("voteup_count") or 0
         comments = answer_or_article.get("commentCount") or answer_or_article.get("comment_count") or 0
         q_title = clean_text(question.get("title", ""))
+        if is_article and not q_title:
+            q_title = clean_text(answer_or_article.get("title", ""))
         q_detail = clean_text(self._strip_html(question.get("detail", "")))
         q_visits = question.get("visitCount") or question.get("visit_count") or 0
         q_answers = question.get("answerCount") or question.get("answer_count") or 0
@@ -258,25 +260,7 @@ def _write(log: Callable, msg: str):
 
 def load_links_from_csv(csv_path: Path) -> list[str]:
     """从 CSV 读取所有链接（兼容跨行记录）"""
-    import csv
-    links = []
-    with open(csv_path, "r", encoding="utf-8-sig") as f:
-        reader = csv.reader(f)
-        header = next(reader)
-        link_col = 1
-        for i, h in enumerate(header):
-            if "内容" in h.strip().replace("﻿", ""):
-                link_col = i; break
-        current = None
-        for row in reader:
-            has_link = len(row) > link_col and row[link_col].strip().startswith("http")
-            if has_link:
-                if current is not None:
-                    links.append(current[link_col].strip() if len(current) > link_col else "")
-                current = row
-        if current is not None:
-            links.append(current[link_col].strip() if len(current) > link_col else "")
-    return [l for l in links if l]
+    return extract_links_from_csv(csv_path, link_col_index=1)
 
 
 def run_batch_scrape(
@@ -307,7 +291,10 @@ def run_batch_scrape(
         with open(output_csv, "r", encoding="utf-8-sig") as f:
             for row in csv.DictReader(f):
                 u = row.get("问答链接", "").strip()
-                if u: processed_urls.add(u)
+                # Older output files do not store an error marker.  A blank row is
+                # therefore treated as a failed request and retried on resume.
+                if u and (row.get("问题标题") or row.get("问题内容") or row.get("回答内容")):
+                    processed_urls.add(u)
         print(f"📥 已处理: {len(processed_urls)} 条（断点续爬）")
 
     pending = [(i, url) for i, url in enumerate(links) if url not in processed_urls]
@@ -365,10 +352,12 @@ def run_batch_scrape(
             ptype = result.get('帖子类型', '')
             pbar.write(f"  ✅ [{ptype}] {title[:30]}  {stats}")
 
-        # 写入 CSV
-        row = {k: result.get(k, "") for k in fieldnames}
-        writer.writerow(row)
-        out_file.flush()
+        # Do not persist failed requests as completed records.  This keeps resume
+        # useful when a cookie expires or a transient network error occurs.
+        if not err:
+            row = {k: result.get(k, "") for k in fieldnames}
+            writer.writerow(row)
+            out_file.flush()
 
         # 更新进度条后缀
         pbar.set_postfix_str(f"✔{success} ✘{failed}")
